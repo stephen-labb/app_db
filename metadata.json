@@ -1,0 +1,8 @@
+{
+  "name": "Application Criticality Manager V2",
+  "description": "Centralized database for AppSec to manage application criticality ratings and for IT teams to view them.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

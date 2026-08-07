@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # On-Premises PostgreSQL Database Service
+  # ==========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: appsec_postgres
+    restart: always
+    environment:
+      POSTGRES_DB: app_db
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: P@ssw0rd
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d app_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================
+  # AppSec Criticality Manager Application
+  # ==========================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: appsec_manager
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: app_db
+      DB_USER: admin
+      DB_PASSWORD: P@ssw0rd
+      DATABASE_URL: postgres://admin:P%40ssw0rd@postgres:5432/app_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+    driver: local
