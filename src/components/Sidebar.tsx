@@ -11,17 +11,20 @@ import {
   ChevronLeft,
   ChevronRight,
   Shield,
+  ShieldCheck,
   Eye,
   Menu,
   X,
   UserCheck,
+  Users,
   ShieldAlert,
   Lock,
-  Settings
+  Settings,
+  Award
 } from 'lucide-react';
 import { UserRole, ActiveSsoUser } from '../types';
 
-export type TabType = 'apps' | 'sso-scim' | 'self-rating' | 'review-queue' | 'sop' | 'matrix' | 'audit';
+export type TabType = 'apps' | 'sso-scim' | 'user-management' | 'rbac-control' | 'security-reports' | 'promotion-records' | 'self-rating' | 'review-queue' | 'sop' | 'matrix' | 'audit';
 
 interface SidebarProps {
   activeTab: TabType;
@@ -31,6 +34,8 @@ interface SidebarProps {
   auditCount: number;
   pendingCount?: number;
   scimUserCount?: number;
+  groupMappingsCount?: number;
+  provisionedUsersCount?: number;
   currentRole: UserRole;
   activeSsoUser?: ActiveSsoUser;
   onOpenAzureLogin?: () => void;
@@ -47,6 +52,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   auditCount,
   pendingCount = 0,
   scimUserCount = 0,
+  groupMappingsCount = 0,
+  provisionedUsersCount = 0,
   currentRole,
   activeSsoUser,
   onOpenAzureLogin,
@@ -55,6 +62,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setIsMobileOpen
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const isAdmin = currentRole === 'SUPER_ADMIN' || currentRole === 'APPSEC_ADMIN';
 
   const navigationSections = [
     {
@@ -69,13 +77,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
           adminOnly: false
         },
         {
-          id: 'sso-scim' as TabType,
-          label: 'Azure SSO & SCIM',
-          icon: KeyRound,
-          badge: scimUserCount > 0 ? `${scimUserCount} Synced` : 'Enterprise',
-          badgeBg: 'bg-blue-100 text-blue-800 font-bold dark:bg-blue-900/60 dark:text-blue-300',
-          highlight: true,
-          adminOnly: true // Restrict tab for Admin roles only
+          id: 'security-reports' as TabType,
+          label: 'ArmorCode Reports',
+          icon: ShieldCheck,
+          badge: 'API',
+          badgeBg: 'bg-emerald-100 text-emerald-800 font-bold dark:bg-emerald-900/60 dark:text-emerald-300',
+          adminOnly: false
+        },
+        {
+          id: 'promotion-records' as TabType,
+          label: 'Auditable Promotion Records',
+          icon: Award,
+          badge: 'Audit',
+          badgeBg: 'bg-amber-100 text-amber-800 font-bold dark:bg-amber-900/60 dark:text-amber-300',
+          adminOnly: false
         }
       ]
     },
@@ -118,6 +133,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
           badge: 'SLA',
           badgeBg: 'bg-amber-100 text-amber-800',
           adminOnly: false
+        }
+      ]
+    },
+    {
+      group: 'Settings',
+      adminOnlySection: true,
+      items: [
+        {
+          id: 'user-management' as TabType,
+          label: 'User Management',
+          icon: Users,
+          badge: provisionedUsersCount > 0 ? `${provisionedUsersCount}` : 'IAM',
+          badgeBg: 'bg-emerald-100 text-emerald-800 font-bold dark:bg-emerald-900/60 dark:text-emerald-300',
+          adminOnly: true
+        },
+        {
+          id: 'rbac-control' as TabType,
+          label: 'RBAC Control',
+          icon: Shield,
+          badge: groupMappingsCount > 0 ? `${groupMappingsCount} Rules` : 'Policy',
+          badgeBg: 'bg-purple-100 text-purple-800 font-bold dark:bg-purple-900/60 dark:text-purple-300',
+          adminOnly: true
+        },
+        {
+          id: 'sso-scim' as TabType,
+          label: 'SSO Configuration',
+          icon: KeyRound,
+          badge: scimUserCount > 0 ? `${scimUserCount} Synced` : 'Enterprise',
+          badgeBg: 'bg-blue-100 text-blue-800 font-bold dark:bg-blue-900/60 dark:text-blue-300',
+          highlight: true,
+          adminOnly: true
         },
         {
           id: 'audit' as TabType,
@@ -125,7 +171,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           icon: History,
           badge: `${auditCount}`,
           badgeBg: 'bg-slate-200 text-slate-700',
-          adminOnly: false
+          adminOnly: true
         }
       ]
     }
@@ -174,8 +220,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Navigation Items Scroll Area */}
         <div className="flex-1 overflow-y-auto px-3 py-4 space-y-6 scrollbar-thin scrollbar-thumb-slate-700">
-          {navigationSections.map((section, idx) => (
-            <div key={idx} className="space-y-1">
+          {navigationSections.map((section, idx) => {
+            if (section.adminOnlySection && !isAdmin) {
+              return null;
+            }
+            return (
+              <div key={idx} className="space-y-1">
               {!isCollapsed && (
                 <h3 className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
                   {section.group}
@@ -246,7 +296,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 );
               })}
             </div>
-          ))}
+          );
+        })}
         </div>
 
         {/* Sidebar Footer: Active Authenticated SCIM Identity Info */}

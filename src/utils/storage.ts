@@ -153,7 +153,9 @@ export function addAuditLog(
   action: AuditLogEntry['action'],
   details: string,
   appId?: string,
-  appName?: string
+  appName?: string,
+  component?: string,
+  complianceTag?: string
 ): AuditLogEntry {
   const currentLogs = loadAuditLogs();
   const newEntry: AuditLogEntry = {
@@ -164,7 +166,9 @@ export function addAuditLog(
     action,
     details,
     appId,
-    appName
+    appName,
+    component: component || 'Applications Database',
+    complianceTag: complianceTag || 'SOC2-CC6.1-AUDIT-TRAIL'
   };
   const updated = [newEntry, ...currentLogs];
   saveAuditLogs(updated);

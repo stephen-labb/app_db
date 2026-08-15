@@ -1,14 +1,15 @@
 import pg from 'pg';
+import appSettings from '../appsettings.json';
 
 const { Pool } = pg;
 
-// PostgreSQL Connection Configuration matching user on-prem specs
+// PostgreSQL Connection Configuration reading from appsettings.json
 const dbConfig = {
-  host: process.env.DB_HOST || '127.0.0.1',
-  port: parseInt(process.env.DB_PORT || '5432', 10),
-  database: process.env.DB_NAME || 'app_db',
-  user: process.env.DB_USER || 'admin',
-  password: process.env.DB_PASSWORD || 'P@ssw0rd',
+  host: process.env.DB_HOST || appSettings.Database?.Host || '127.0.0.1',
+  port: parseInt(process.env.DB_PORT || String(appSettings.Database?.Port || 5432), 10),
+  database: process.env.DB_NAME || appSettings.Database?.DatabaseName || 'app_db',
+  user: process.env.DB_USER || appSettings.Database?.User || 'admin',
+  password: process.env.DB_PASSWORD || appSettings.Database?.Password || 'P@ssw0rd',
   connectionTimeoutMillis: 3000,
   idleTimeoutMillis: 10000,
 };
@@ -170,7 +171,21 @@ export async function initDbTables(): Promise<boolean> {
         mapped_role VARCHAR(50),
         last_synced_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         department VARCHAR(100),
-        title VARCHAR(255)
+        title VARCHAR(255),
+        iam_status VARCHAR(50) DEFAULT 'ACTIVE',
+        added_to_iam_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        added_by_iam_admin VARCHAR(255) DEFAULT 'AppSec Administrator'
+      );
+
+      CREATE TABLE IF NOT EXISTS manual_user_mappings (
+        id VARCHAR(100) PRIMARY KEY,
+        email_or_upn VARCHAR(255) UNIQUE NOT NULL,
+        assigned_role VARCHAR(50) NOT NULL,
+        notes TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_by VARCHAR(255),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        iam_status VARCHAR(50) DEFAULT 'ACTIVE'
       );
 
       CREATE TABLE IF NOT EXISTS scim_audit_logs (
