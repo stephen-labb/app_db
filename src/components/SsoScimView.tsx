@@ -954,7 +954,7 @@ export const SsoScimView: React.FC<SsoScimViewProps> = ({
                   <div>
                     <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1 flex items-center justify-between">
                       <span>Client Secret *</span>
-                      <span className="text-[10px] text-slate-400 font-normal">Certificates & Secrets Value</span>
+                      <span className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold">Copy 'Value', NOT 'Secret ID'</span>
                     </label>
                     <input
                       type="password"
@@ -964,6 +964,9 @@ export const SsoScimView: React.FC<SsoScimViewProps> = ({
                       className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-slate-900 dark:text-white"
                       placeholder="eER8Q~••••••••••••••••"
                     />
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                      💡 <strong>Important</strong>: Copy the string from the <strong>Value</strong> column in Azure Portal (e.g. <code className="text-indigo-600 dark:text-indigo-400">eER8Q~...</code> or <code className="text-indigo-600 dark:text-indigo-400">~3x...</code>), NOT the <strong>Secret ID</strong> GUID.
+                    </p>
                   </div>
 
                   <div>

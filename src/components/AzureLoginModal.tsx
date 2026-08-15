@@ -758,7 +758,7 @@ export const AzureLoginModal: React.FC<AzureLoginModalProps> = ({
             <>
               {/* HTTP 403 Forbidden / OIDC Error Banner (Displayed in App Modal) */}
               {popupError && (
-                <div className="p-4 bg-rose-950/90 border border-rose-500/60 rounded-xl space-y-2 animate-fadeIn shadow-lg shadow-rose-950/50">
+                <div className="p-4 bg-rose-950/90 border border-rose-500/60 rounded-xl space-y-2.5 animate-fadeIn shadow-lg shadow-rose-950/50">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-2.5">
                       <span className="px-2 py-0.5 bg-rose-500/20 text-rose-300 border border-rose-500/40 rounded text-[10px] font-mono font-bold">
@@ -772,12 +772,42 @@ export const AzureLoginModal: React.FC<AzureLoginModalProps> = ({
                       <X className="w-4 h-4" />
                     </button>
                   </div>
-                  <p className="text-xs text-rose-200/90 leading-relaxed font-mono bg-rose-900/40 p-2.5 rounded-lg border border-rose-800/50">
+                  <p className="text-xs text-rose-200/90 leading-relaxed font-mono bg-rose-900/40 p-2.5 rounded-lg border border-rose-800/50 break-words">
                     {popupError}
                   </p>
-                  <p className="text-[11px] text-slate-400">
-                    💡 <strong className="text-slate-300">Note:</strong> Check that your account is assigned to the Entra ID enterprise app or has valid email/UPN identity claims.
-                  </p>
+                  
+                  {popupError.includes('AADSTS700016') ? (
+                    <div className="bg-slate-900/90 border border-amber-500/40 rounded-xl p-3 text-xs space-y-2">
+                      <div className="flex items-center gap-2 text-amber-300 font-semibold">
+                        <Key className="w-4 h-4 text-amber-400" />
+                        <span>Tenant ID & Client ID Mismatch Fix:</span>
+                      </div>
+                      <p className="text-[11px] text-slate-300">
+                        Microsoft cannot find the Application ID in Tenant <code className="text-amber-300 font-mono">2c7d678a-3080-4d64-a967-67f2da6d3cae</code>.
+                      </p>
+                      <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-300">
+                        <li>Go to Azure Portal &rarr; <strong>Microsoft Entra ID</strong> &rarr; <strong>Overview</strong> and copy your actual <strong>Directory (tenant) ID</strong>.</li>
+                        <li>Click <strong>App registrations</strong> &rarr; Select your app and copy the <strong>Application (client) ID</strong>.</li>
+                        <li>In this app, go to <strong>Azure AD SSO & SCIM</strong> tab &rarr; <strong>Azure AD Settings & Guide</strong> and paste BOTH the matching Tenant ID and Client ID.</li>
+                      </ol>
+                    </div>
+                  ) : (popupError.includes('AADSTS7000215') || popupError.includes('Invalid')) ? (
+                    <div className="bg-slate-900/90 border border-amber-500/40 rounded-xl p-3 text-xs space-y-2">
+                      <div className="flex items-center gap-2 text-amber-300 font-semibold">
+                        <Key className="w-4 h-4 text-amber-400" />
+                        <span>How to fix Azure Client Secret in 3 steps:</span>
+                      </div>
+                      <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-300">
+                        <li>In Azure Portal &rarr; <strong>Microsoft Entra ID</strong> &rarr; <strong>App registrations</strong> &rarr; Select your app.</li>
+                        <li>Click <strong>Certificates & secrets</strong> &rarr; <strong>+ New client secret</strong>.</li>
+                        <li>Copy the string under the <strong>Value</strong> column (e.g. <code className="text-emerald-400 font-mono">eER8Q~...</code>), <em>NOT</em> the Secret ID GUID, then save it in the <strong>Azure AD SSO & SCIM</strong> tab.</li>
+                      </ol>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-slate-400">
+                      💡 <strong className="text-slate-300">Note:</strong> Check that your account is assigned to the Entra ID enterprise app or has valid email/UPN identity claims.
+                    </p>
+                  )}
                 </div>
               )}
 

@@ -1108,7 +1108,10 @@ const oidcCallbackHandler = async (req: Request, res: Response) => {
 
   // 1. If Microsoft Entra ID returned an explicit OIDC error or user cancelled authorization
   if (error || error_description) {
-    const errMessage = (error_description || error || 'OIDC Authorization Failed').toString();
+    let errMessage = (error_description || error || 'OIDC Authorization Failed').toString();
+    if (errMessage.includes('AADSTS700016')) {
+      errMessage = `AADSTS700016: Application ID was not found in Directory/Tenant. Please verify that your Tenant ID and Application (Client) ID match the same directory in Azure Portal. (${errMessage})`;
+    }
     const fullErr = `HTTP 403 Forbidden: Microsoft Entra ID returned authorization error - ${errMessage}`;
     return res.status(403).send(`
       <!DOCTYPE html>
@@ -1214,7 +1217,12 @@ const oidcCallbackHandler = async (req: Request, res: Response) => {
       }
 
       if (!fetchedEmail && (tokenData.error || tokenData.error_description)) {
-        tokenExchangeError = tokenData.error_description || tokenData.error || 'Token exchange failed';
+        const rawDesc = tokenData.error_description || tokenData.error || 'Token exchange failed';
+        if (rawDesc.includes('AADSTS7000215') || rawDesc.includes('Invalid client secret')) {
+          tokenExchangeError = `AADSTS7000215: Invalid Azure Client Secret. Please ensure you copied the 'Value' column string (e.g. eER8Q~... or ~3x...), NOT the 'Secret ID' GUID from Azure Portal -> App Registrations -> Certificates & Secrets.`;
+        } else {
+          tokenExchangeError = rawDesc;
+        }
       }
     } catch (err: any) {
       tokenExchangeError = err.message || 'Failed to exchange authorization code with Microsoft Entra ID';
