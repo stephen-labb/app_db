@@ -346,12 +346,23 @@ export interface ArmorCodeSubproduct {
   [key: string]: any;
 }
 
+export interface ArmorCodeProductElasticQuery {
+  environmentName?: string[];
+  pageSize?: number;
+  pageNumber?: number;
+  sortBy?: string;
+  search?: string;
+  direction?: string;
+}
+
 export interface ArmorCodeProductsResponse {
   success: boolean;
   products: ArmorCodeProduct[];
   source?: string;
   errorMessage?: string;
   endpointUsed?: string;
+  totalElements?: number;
+  totalPages?: number;
 }
 
 export interface ArmorCodeSubproductsResponse {

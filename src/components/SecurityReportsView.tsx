@@ -86,12 +86,19 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
   const [isFetchingSubproducts, setIsFetchingSubproducts] = useState<boolean>(false);
   const [subproductsSource, setSubproductsSource] = useState<string>('');
 
-  // Fetch Products from https://app.armorcode.com/api/product via proxy
-  const loadArmorCodeProducts = async () => {
+  // Fetch Products from https://app.armorcode.com/user/product/elastic/paged via proxy
+  const loadArmorCodeProducts = async (searchQuery?: string) => {
     setIsFetchingProducts(true);
     try {
-      const res = await fetchArmorCodeProducts(apiKey);
-      if (res.products && res.products.length > 0) {
+      const res = await fetchArmorCodeProducts(apiKey, undefined, {
+        search: searchQuery !== undefined ? searchQuery : (projectName || ''),
+        pageSize: 20,
+        pageNumber: 0,
+        environmentName: ['PRODUCTION'],
+        sortBy: 'NAME',
+        direction: 'ASC'
+      });
+      if (res.products) {
         setProductsOptions(res.products.map(p => ({
           id: p.id || p.name,
           name: p.name,
@@ -547,14 +554,17 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                     onChange={(val) => {
                       setProjectName(val);
                     }}
+                    onSearchChange={(query) => {
+                      loadArmorCodeProducts(query);
+                    }}
                     options={productsOptions}
                     placeholder="Type to search or select ArmorCode product..."
                     isLoading={isFetchingProducts}
-                    onRefresh={loadArmorCodeProducts}
+                    onRefresh={() => loadArmorCodeProducts(projectName || '')}
                     required={true}
                     iconType="product"
-                    badgeText={productsSource === 'LIVE_API' ? 'ArmorCode API /api/product' : 'ArmorCode Catalog'}
-                    helpText="Fetches projects live from https://app.armorcode.com/api/product or allows typing manual entry."
+                    badgeText={productsSource === 'LIVE_API' ? 'ArmorCode Elastic API (Live)' : 'ArmorCode Catalog'}
+                    helpText="Searches live in real-time against POST https://app.armorcode.com/user/product/elastic/paged as you type."
                   />
                   {applications.length > 0 && (
                     <div className="flex flex-wrap items-center gap-1.5 pt-1">

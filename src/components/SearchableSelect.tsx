@@ -13,6 +13,8 @@ interface SearchableSelectProps {
   label: string;
   value: string;
   onChange: (value: string, selectedOption?: SearchableOption) => void;
+  onSearchChange?: (term: string) => void;
+  debounceMs?: number;
   options: SearchableOption[];
   placeholder?: string;
   isLoading?: boolean;
@@ -30,6 +32,8 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   label,
   value,
   onChange,
+  onSearchChange,
+  debounceMs = 250,
   options = [],
   placeholder = 'Type to search or select...',
   isLoading = false,
@@ -45,11 +49,21 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState(value || '');
   const containerRef = useRef<HTMLDivElement>(null);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Synchronize internal search term when external value prop changes
   useEffect(() => {
     setSearchTerm(value || '');
   }, [value]);
+
+  // Clean up debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
 
   // Handle click outside to close dropdown
   useEffect(() => {
@@ -64,9 +78,11 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
     };
   }, []);
 
-  // Filter options based on user input
+  // Filter options based on user input (or display all options returned by server if onSearchChange is used)
   const filteredOptions = options.filter((opt) => {
     if (!searchTerm.trim()) return true;
+    // If onSearchChange is enabled and options already came from backend search, allow all returned items
+    if (onSearchChange && options.length > 0) return true;
     const term = searchTerm.toLowerCase().trim();
     const matchesName = (opt.name || '').toLowerCase().includes(term);
     const matchesDesc = (opt.description || '').toLowerCase().includes(term);
@@ -89,6 +105,16 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
     setSearchTerm(newValue);
     onChange(newValue);
     if (!isOpen) setIsOpen(true);
+
+    // Real-time debounced trigger for external search (e.g. ArmorCode elastic endpoint)
+    if (onSearchChange) {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+      debounceTimerRef.current = setTimeout(() => {
+        onSearchChange(newValue);
+      }, debounceMs);
+    }
   };
 
   const handleSelectCustom = () => {

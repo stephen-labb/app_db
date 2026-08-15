@@ -5,21 +5,38 @@ import {
   ArmorCodeProduct,
   ArmorCodeSubproduct,
   ArmorCodeProductsResponse,
-  ArmorCodeSubproductsResponse
+  ArmorCodeSubproductsResponse,
+  ArmorCodeProductElasticQuery
 } from '../types';
 import appSettings from '../../appsettings.json';
 
 export async function fetchArmorCodeProducts(
   apiKey?: string,
-  customEndpoint?: string
+  customEndpoint?: string,
+  elasticQuery?: ArmorCodeProductElasticQuery
 ): Promise<ArmorCodeProductsResponse> {
+  const defaultEndpoint = appSettings.ArmorCode?.ProductApiEndpoint || 'https://app.armorcode.com/user/product/elastic/paged';
+  const targetEndpoint = customEndpoint || defaultEndpoint;
+
+  // Elastic paged query payload specification
+  const payload = {
+    environmentName: elasticQuery?.environmentName || ['PRODUCTION'],
+    pageSize: elasticQuery?.pageSize ?? 20,
+    pageNumber: elasticQuery?.pageNumber ?? 0,
+    sortBy: elasticQuery?.sortBy || 'NAME',
+    search: elasticQuery?.search ?? 'testing',
+    direction: elasticQuery?.direction || 'ASC',
+    apiKey,
+    customEndpoint: targetEndpoint
+  };
+
   try {
     const res = await fetch('/api/armorcode/products', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ apiKey, customEndpoint }),
+      body: JSON.stringify(payload),
     });
 
     if (!res.ok) {
@@ -28,7 +45,7 @@ export async function fetchArmorCodeProducts(
         products: [],
         source: 'FALLBACK',
         errorMessage: `HTTP ${res.status}: ${res.statusText}`,
-        endpointUsed: customEndpoint || appSettings.ArmorCode?.ProductApiEndpoint || 'https://app.armorcode.com/api/product'
+        endpointUsed: targetEndpoint
       };
     }
 
@@ -40,7 +57,7 @@ export async function fetchArmorCodeProducts(
       products: [],
       source: 'FALLBACK',
       errorMessage: error.message || 'Failed to fetch ArmorCode products',
-      endpointUsed: customEndpoint || appSettings.ArmorCode?.ProductApiEndpoint || 'https://app.armorcode.com/api/product'
+      endpointUsed: targetEndpoint
     };
   }
 }

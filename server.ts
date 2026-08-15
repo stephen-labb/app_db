@@ -512,10 +512,23 @@ app.get('/api/appsettings', (req, res) => {
 // ARMORCODE PRODUCTS & SUBPRODUCTS API PROXY
 // ==========================================
 
-// 1. Fetch Products (Project Names) from https://app.armorcode.com/api/product
-app.all(['/api/armorcode/products', '/api/armorcode/products/'], async (req, res) => {
+// 1. Fetch Products (Project Names) from https://app.armorcode.com/user/product/elastic/paged
+app.all(['/api/armorcode/products', '/api/armorcode/products/', '/api/armorcode/product', '/api/armorcode/product/'], async (req, res) => {
   const apiKey = req.body?.apiKey || req.query?.apiKey || appSettings.ArmorCode?.ApiKey || '';
-  const customEndpoint = req.body?.customEndpoint || req.query?.customEndpoint || appSettings.ArmorCode?.ProductApiEndpoint || 'https://app.armorcode.com/api/product';
+  const customEndpoint = req.body?.customEndpoint || req.query?.customEndpoint || appSettings.ArmorCode?.ProductApiEndpoint || 'https://app.armorcode.com/user/product/elastic/paged';
+
+  const searchQuery = req.body?.search !== undefined 
+    ? String(req.body.search) 
+    : (req.query?.search !== undefined ? String(req.query.search) : "");
+
+  const requestBody = {
+    environmentName: req.body?.environmentName || ["PRODUCTION"],
+    pageSize: req.body?.pageSize !== undefined ? Number(req.body.pageSize) : 20,
+    pageNumber: req.body?.pageNumber !== undefined ? Number(req.body.pageNumber) : 0,
+    sortBy: req.body?.sortBy || "NAME",
+    search: searchQuery,
+    direction: req.body?.direction || "ASC"
+  };
 
   const defaultProducts = [
     { id: 'prod-1', name: 'sample', description: 'Sample Sandbox Enterprise Application Project', category: 'General' },
@@ -542,8 +555,9 @@ app.all(['/api/armorcode/products', '/api/armorcode/products/'], async (req, res
     }
 
     const apiRes = await fetch(customEndpoint, {
-      method: req.method === 'GET' ? 'GET' : 'POST',
+      method: 'POST',
       headers,
+      body: JSON.stringify(requestBody),
       signal: controller.signal
     });
 
@@ -555,40 +569,47 @@ app.all(['/api/armorcode/products', '/api/armorcode/products/'], async (req, res
 
       if (Array.isArray(liveData)) {
         productsList = liveData;
+      } else if (Array.isArray(liveData.content)) {
+        productsList = liveData.content;
       } else if (Array.isArray(liveData.products)) {
         productsList = liveData.products;
       } else if (Array.isArray(liveData.data)) {
         productsList = liveData.data;
-      } else if (Array.isArray(liveData.content)) {
-        productsList = liveData.content;
       }
 
-      if (productsList.length > 0) {
-        const formatted = productsList.map((p: any, idx: number) => ({
-          id: p.id || p.productId || `ac-p-${idx + 1}`,
-          name: typeof p === 'string' ? p : (p.name || p.productName || p.key || `Product-${idx + 1}`),
-          description: typeof p === 'object' ? (p.description || p.details || '') : '',
-          category: typeof p === 'object' ? (p.category || 'ArmorCode Product') : 'ArmorCode Product'
-        }));
+      const formatted = productsList.map((p: any, idx: number) => ({
+        id: p.id || p.productId || `ac-p-${idx + 1}`,
+        name: typeof p === 'string' ? p : (p.name || p.productName || p.displayName || p.key || `Product-${idx + 1}`),
+        description: typeof p === 'object' ? (p.description || p.details || '') : '',
+        category: typeof p === 'object' ? (p.category || 'ArmorCode Product') : 'ArmorCode Product'
+      }));
 
-        return res.json({
-          success: true,
-          products: formatted,
-          source: 'LIVE_API',
-          endpointUsed: customEndpoint
-        });
-      }
+      return res.json({
+        success: true,
+        products: formatted,
+        totalElements: liveData.totalElements !== undefined ? liveData.totalElements : formatted.length,
+        totalPages: liveData.totalPages || 1,
+        source: 'LIVE_API',
+        endpointUsed: customEndpoint,
+        payloadSent: requestBody
+      });
     }
   } catch (err: any) {
     console.warn('[ArmorCode API Proxy] Products endpoint live fetch notice:', err.message);
   }
 
-  // Fallback list when live endpoint is unavailable or returns empty
+  // Filter default catalog if live API is unavailable
+  const filteredCatalog = defaultProducts.filter(p => 
+    !searchQuery || p.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  // Fallback list when live endpoint is unavailable
   return res.json({
     success: true,
-    products: defaultProducts,
+    products: filteredCatalog.length > 0 ? filteredCatalog : defaultProducts,
     source: 'FALLBACK_CATALOG',
-    endpointUsed: customEndpoint
+    endpointUsed: customEndpoint,
+    payloadSent: requestBody
   });
 });
 
