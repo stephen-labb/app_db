@@ -8,8 +8,10 @@ import {
   exportArmorCodeFindingsCSV
 } from '../services/armorcodeService';
 import { SearchableSelect, SearchableOption } from './SearchableSelect';
+import { MultiSearchableSelect } from './MultiSearchableSelect';
 import {
   evaluateCompliance,
+  isFindingResolved,
   createAndSavePromotionEvidence,
   loadPromotionEvidences,
   asyncFetchPromotionEvidences,
@@ -71,13 +73,18 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
 
   // Query Form State
   const [projectName, setProjectName] = useState<string>(appSettings.ArmorCode?.DefaultProject || 'sample');
-  const [repositoryName, setRepositoryName] = useState<string>(appSettings.ArmorCode?.DefaultRepository || 'sample_repo');
-  const [branchName, setBranchName] = useState<string>(appSettings.ArmorCode?.DefaultBranch || 'master');
-  const [selectedTypes, setSelectedTypes] = useState<string[]>(['sast', 'sca', 'secret', 'dast', 'iac', 'container']);
-  const [customEndpoint, setCustomEndpoint] = useState<string>(appSettings.ArmorCode?.ApiEndpoint || 'https://app.armorcode.com/api/findings');
-  const [apiKey, setApiKey] = useState<string>(appSettings.ArmorCode?.ApiKey || '');
+  const [selectedRepositories, setSelectedRepositories] = useState<string[]>([appSettings.ArmorCode?.DefaultRepository || 'sample_repo']);
+  const [branchName, setBranchName] = useState<string>(appSettings.ArmorCode?.DefaultBranch || 'main');
+  const [selectedTypes, setSelectedTypes] = useState<string[]>(
+    appSettings.ArmorCode?.DefaultScanTypes || ["SAST", "SCA", "Secrets"]
+  );
+  const [customEndpoint] = useState<string>(appSettings.ArmorCode?.ApiEndpoint || 'https://app.armorcode.com/user/findings/');
+  const [apiKey] = useState<string>(appSettings.ArmorCode?.ApiKey || '');
+
+  const repositoryName = selectedRepositories.join(', ');
 
   // Products & Subproducts List States (Searchable Dropdowns)
+  const [selectedProductId, setSelectedProductId] = useState<string>('');
   const [productsOptions, setProductsOptions] = useState<SearchableOption[]>([]);
   const [isFetchingProducts, setIsFetchingProducts] = useState<boolean>(false);
   const [productsSource, setProductsSource] = useState<string>('');
@@ -99,13 +106,22 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
         direction: 'ASC'
       });
       if (res.products) {
-        setProductsOptions(res.products.map(p => ({
-          id: p.id || p.name,
+        const formattedOpts: SearchableOption[] = res.products.map(p => ({
+          id: p.id !== undefined ? String(p.id) : p.name,
           name: p.name,
-          description: p.description || `ArmorCode Product: ${p.name}`,
+          description: p.id ? `Product ID: ${p.id}` : (p.description || `ArmorCode Product: ${p.name}`),
           category: p.category || 'Product'
-        })));
+        }));
+        setProductsOptions(formattedOpts);
         setProductsSource(res.source || 'LIVE_API');
+
+        // Automatically associate product ID if current projectName matches one of the results
+        if (!selectedProductId && projectName) {
+          const matched = formattedOpts.find(opt => opt.name.toLowerCase() === projectName.toLowerCase());
+          if (matched && matched.id) {
+            setSelectedProductId(String(matched.id));
+          }
+        }
       }
     } catch (e) {
       console.warn('Failed to load ArmorCode products:', e);
@@ -114,19 +130,39 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
     }
   };
 
-  // Fetch Subproducts (Repositories) from https://app.armorcode.com/api/subproduct via proxy
-  const loadArmorCodeSubproducts = async (proj: string) => {
+  // Fetch Subproducts (Repositories) from https://app.armorcode.com/api/dashboard/sub-product/name-id via proxy
+  const loadArmorCodeSubproducts = async (prodIdOrName?: string, searchSubproductQuery?: string) => {
     setIsFetchingSubproducts(true);
     try {
-      const res = await fetchArmorCodeSubproducts(proj, apiKey);
+      let activeId = prodIdOrName || selectedProductId;
+      // If activeId is a name, attempt lookup in productsOptions
+      if (activeId && productsOptions.length > 0) {
+        const matched = productsOptions.find(
+          p => p.name.toLowerCase() === activeId.toLowerCase() || String(p.id) === String(activeId)
+        );
+        if (matched && matched.id) {
+          activeId = String(matched.id);
+        }
+      }
+
+      const res = await fetchArmorCodeSubproducts(
+        activeId ? [activeId] : [],
+        projectName,
+        apiKey,
+        undefined,
+        searchSubproductQuery
+      );
+
       if (res.subproducts && res.subproducts.length > 0) {
         setSubproductsOptions(res.subproducts.map(sp => ({
-          id: sp.id || sp.name,
+          id: String(sp.id || sp.name),
           name: sp.name,
-          description: sp.description || `Repository under ${proj}`,
+          description: sp.id ? `Repo ID: ${sp.id}` : `Repository under ${projectName}`,
           category: sp.category || 'Repository'
         })));
         setSubproductsSource(res.source || 'LIVE_API');
+      } else {
+        setSubproductsOptions([]);
       }
     } catch (e) {
       console.warn('Failed to load ArmorCode subproducts:', e);
@@ -140,18 +176,15 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
     loadArmorCodeProducts();
   }, [apiKey]);
 
-  // Auto-fetch subproducts whenever selected project name changes
+  // Auto-fetch subproducts whenever selected product or project name changes
   useEffect(() => {
-    if (projectName) {
-      loadArmorCodeSubproducts(projectName);
+    if (selectedProductId || projectName) {
+      loadArmorCodeSubproducts(selectedProductId || projectName);
     }
-  }, [projectName, apiKey]);
+  }, [selectedProductId, projectName, apiKey]);
 
   // UI Toggle States
-  const [showAdvancedConfig, setShowAdvancedConfig] = useState<boolean>(false);
   const [showSchemaMappingInfo, setShowSchemaMappingInfo] = useState<boolean>(false);
-  const [copiedPayload, setCopiedPayload] = useState<boolean>(false);
-  const [copiedCurl, setCopiedCurl] = useState<boolean>(false);
   const [expandedFindingId, setExpandedFindingId] = useState<string | null>(null);
 
   // Response & Filter States
@@ -160,6 +193,7 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [selectedSeverityFilter, setSelectedSeverityFilter] = useState<string>('ALL');
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<string>('ALL');
+  const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>('ALL');
 
   // Promotion Evidence Modal & Historic Records State
   const [promotionModalOpen, setPromotionModalOpen] = useState<boolean>(false);
@@ -193,14 +227,18 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
     }
   }, [promotionModalOpen, projectName, applications]);
 
-  // Supported scan categories
-  const supportedFindingTypes = appSettings.ArmorCode?.SupportedFindingTypes || [
-    { id: 'sast', name: 'SAST (Static Code)', category: 'Code Quality' },
-    { id: 'sca', name: 'SCA (Open Source)', category: 'Dependencies' },
-    { id: 'secret', name: 'Secret Detection', category: 'Credentials' },
-    { id: 'dast', name: 'DAST (Dynamic Scanning)', category: 'Runtime' },
-    { id: 'iac', name: 'IaC Infrastructure', category: 'Cloud' },
-    { id: 'container', name: 'Container Security', category: 'Docker' }
+  // Supported 10 ArmorCode scan categories
+  const supportedFindingTypes = [
+    { id: 'API Security', name: 'API Security', category: 'API Scanner' },
+    { id: 'Code Insights', name: 'Code Insights', category: 'Quality' },
+    { id: 'Container Security', name: 'Container Security', category: 'Docker/K8s' },
+    { id: 'CSPM', name: 'CSPM', category: 'Cloud Security' },
+    { id: 'DAST', name: 'DAST', category: 'Dynamic Scan' },
+    { id: 'Data Security', name: 'Data Security', category: 'Data & PII' },
+    { id: 'Infrastructure Tools', name: 'Infrastructure Tools', category: 'IaC Tools' },
+    { id: 'SAST', name: 'SAST', category: 'Static Code' },
+    { id: 'SCA', name: 'SCA', category: 'Dependencies' },
+    { id: 'Secrets', name: 'Secrets', category: 'Keys & Tokens' }
   ];
 
   // Auto-run initial sample query & load historic evidences on component mount
@@ -214,16 +252,43 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
     setEvidenceList(list);
   };
 
+  // Lookup subproduct IDs for selected repositories
+  const selectedSubProductIds: (string | number)[] = selectedRepositories.map(repoNameOrId => {
+    const matched = subproductsOptions.find(opt => opt.name === repoNameOrId || String(opt.id) === String(repoNameOrId));
+    if (matched && matched.id !== undefined) {
+      const num = Number(matched.id);
+      return !isNaN(num) && String(num) === String(matched.id).trim() ? num : matched.id;
+    }
+    const num = Number(repoNameOrId);
+    return !isNaN(num) ? num : repoNameOrId;
+  });
+
+  let effectiveProductId: string | number | undefined = selectedProductId;
+  if (!effectiveProductId && projectName) {
+    const matched = productsOptions.find(opt => opt.name === projectName || String(opt.id) === String(projectName));
+    if (matched && matched.id !== undefined) {
+      effectiveProductId = matched.id;
+    } else {
+      const num = Number(projectName);
+      if (!isNaN(num)) effectiveProductId = num;
+    }
+  }
+
   const currentQueryRequest: ArmorCodeQueryRequest = {
     project: projectName,
-    repository: repositoryName.trim(),
-    cycode_branch: branchName.trim(),
+    productId: effectiveProductId,
+    repository: selectedRepositories.length === 1 ? selectedRepositories[0] : (selectedRepositories.length > 1 ? selectedRepositories.join(', ') : ''),
+    repositories: selectedRepositories,
+    subProductIds: selectedSubProductIds.length > 0 ? selectedSubProductIds : undefined,
+    cycode_branch: branchName.trim() || 'main',
     finding_types: selectedTypes,
+    scanTypes: selectedTypes,
+    size: 100,
+    page: 0,
+    timezone: 'Asia/Shanghai',
     apiKey,
     customEndpoint
   };
-
-  const constructedPayload = constructArmorCodePayload(currentQueryRequest);
 
   const handleRunQuery = async () => {
     setIsLoading(true);
@@ -250,22 +315,9 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
   const handleSelectAppSuggestion = (app: Application) => {
     setProjectName(app.name.toLowerCase().replace(/[^a-z0-9]/g, '-'));
     if (app.code) {
-      setRepositoryName(`${app.code.toLowerCase()}-repo`);
+      setSelectedRepositories([`${app.code.toLowerCase()}-repo`]);
     }
   };
-
-  const copyToClipboard = (text: string, isCurl: boolean) => {
-    navigator.clipboard.writeText(text);
-    if (isCurl) {
-      setCopiedCurl(true);
-      setTimeout(() => setCopiedCurl(false), 2000);
-    } else {
-      setCopiedPayload(true);
-      setTimeout(() => setCopiedPayload(false), 2000);
-    }
-  };
-
-  const curlCommand = `curl -X POST "${customEndpoint || 'https://app.armorcode.com/api/findings'}" \\\n  -H "Authorization: Bearer ${apiKey || '<API_KEY>'}" \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify(constructedPayload)}'`;
 
   // Raw findings & Compliance evaluation
   const rawFindings = queryResponse?.results || [];
@@ -278,7 +330,8 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
       (f.finding_id || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (f.remediation || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (f.repository || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (f.tool || '').toLowerCase().includes(searchTerm.toLowerCase());
+      (f.tool || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (f.status || f.ticketStatus || '').toLowerCase().includes(searchTerm.toLowerCase());
 
     const matchesSeverity =
       selectedSeverityFilter === 'ALL' ||
@@ -288,45 +341,79 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
       selectedTypeFilter === 'ALL' ||
       f.type.toLowerCase() === selectedTypeFilter.toLowerCase();
 
-    return matchesSearch && matchesSeverity && matchesType;
+    const isResolved = isFindingResolved(f);
+    const rawStatus = (f.status || f.ticketStatus || 'OPEN').toUpperCase();
+    let matchesStatus = true;
+    if (selectedStatusFilter === 'UNRESOLVED') {
+      matchesStatus = !isResolved;
+    } else if (selectedStatusFilter === 'RESOLVED') {
+      matchesStatus = isResolved;
+    } else if (selectedStatusFilter === 'BLOCKING') {
+      matchesStatus = !isResolved && ((f.severity || '').toUpperCase() === 'CRITICAL' || (f.severity || '').toUpperCase() === 'HIGH');
+    } else if (selectedStatusFilter !== 'ALL') {
+      matchesStatus = rawStatus === selectedStatusFilter;
+    }
+
+    return matchesSearch && matchesSeverity && matchesType && matchesStatus;
   });
 
   // KPI Metrics
   const criticalCount = rawFindings.filter(f => (f.severity || '').toUpperCase() === 'CRITICAL').length;
   const highCount = rawFindings.filter(f => (f.severity || '').toUpperCase() === 'HIGH').length;
+  const unresolvedCriticalHighCount = rawFindings.filter(
+    f => ((f.severity || '').toUpperCase() === 'CRITICAL' || (f.severity || '').toUpperCase() === 'HIGH') && !isFindingResolved(f)
+  ).length;
+  const totalResolvedCount = rawFindings.filter(f => isFindingResolved(f)).length;
   const sastCount = rawFindings.filter(f => f.type.toLowerCase() === 'sast').length;
   const scaCount = rawFindings.filter(f => f.type.toLowerCase() === 'sca').length;
   const secretCount = rawFindings.filter(f => f.type.toLowerCase() === 'secret').length;
   const dastCount = rawFindings.filter(f => f.type.toLowerCase() === 'dast').length;
 
   // Handle generating new Promotion Evidence Snapshot
-  const handleGenerateEvidenceSubmit = (e: React.FormEvent) => {
+  const handleGenerateEvidenceSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!queryResponse) return;
 
-    const mappedApp = applications?.find(a => a.id === selectedAppId);
+    const mappedApp = applications?.find(
+      a => a.id === selectedAppId ||
+      a.code.toLowerCase() === projectName.toLowerCase() ||
+      a.name.toLowerCase() === projectName.toLowerCase()
+    );
+    const snapshotPayload = constructArmorCodePayload(currentQueryRequest);
+    const apiSnapshot = queryResponse || {
+      success: true,
+      source: 'SIMULATED_DATA',
+      endpointUsed: customEndpoint || 'https://app.armorcode.com/api/findings',
+      httpStatus: 200,
+      payloadSent: snapshotPayload,
+      results: rawFindings,
+      totalCount: rawFindings.length,
+      timestamp: new Date().toISOString()
+    };
 
-    const newEvidence = createAndSavePromotionEvidence({
-      project: projectName,
+    const newEvidence = await createAndSavePromotionEvidence({
+      project: projectName || (mappedApp ? mappedApp.code : 'Enterprise-App'),
       repository: repositoryName.trim() || 'ALL_REPOSITORIES',
       branch: branchName.trim() || 'master',
       targetEnvironment: targetEnv,
-      releaseVersion,
-      approvalNotes: isAdminOverride ? `ADMIN OVERRIDE: ${overrideReason}. ${approvalNotes}` : approvalNotes,
+      releaseVersion: releaseVersion.trim() || 'v1.0.0',
+      approvalNotes: isAdminOverride ? `ADMIN OVERRIDE: ${overrideReason}. ${approvalNotes}` : (approvalNotes || 'ArmorCode security gate compliance verified and signed.'),
       userEmail: activeUser.email || 'appsec.lead@enterprise.local',
       userRole: activeUser.role || 'APPSEC_ADMIN',
       complianceEvaluation: complianceResult,
       snapshotFindings: rawFindings,
-      snapshotPayload: constructedPayload,
+      snapshotPayload,
+      apiResponseSnapshot: apiSnapshot,
       apiEndpointUsed: customEndpoint || 'https://app.armorcode.com/api/findings',
       isAdminOverride,
-      applicationId: mappedApp ? mappedApp.id : undefined,
+      applicationId: mappedApp ? mappedApp.id : (selectedAppId || undefined),
       applicationName: mappedApp ? mappedApp.name : undefined
     });
 
     setPromotionModalOpen(false);
     setViewingEvidence(newEvidence);
-    refreshEvidences();
+    setEvidenceList(prev => [newEvidence, ...prev.filter(ev => ev.evidenceId !== newEvidence.evidenceId)]);
+    await refreshEvidences();
+    setActiveSubTab('EVIDENCES');
   };
 
   const handleRevokeEvidence = (id: string) => {
@@ -445,15 +532,15 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                     
                     <p className="text-xs text-slate-300 mt-1">
                       {complianceResult.isCompliant
-                        ? `Project '${projectName}' (Repo: ${repositoryName || 'ALL'}, Branch: ${branchName}) has 0 Critical and 0 High findings. Meets all security standards for production promotion.`
+                        ? `Project '${projectName}' (Repo: ${repositoryName || 'ALL'}, Branch: ${branchName}) has 0 unresolved Critical/High findings. Meets all security standards for production promotion.`
                         : `Gate standard failed: ${complianceResult.reasons.join(' ')}`}
                     </p>
 
                     <div className="flex flex-wrap items-center gap-3 mt-2 text-[11px] font-mono">
-                      <span className="text-rose-400 font-bold">Critical: {complianceResult.criticalCount} (Max: {complianceResult.maxCriticalAllowed})</span>
-                      <span className="text-amber-400 font-bold">High: {complianceResult.highCount} (Max: {complianceResult.maxHighAllowed})</span>
-                      <span className="text-slate-400">Medium: {complianceResult.mediumCount}</span>
-                      <span className="text-slate-400">Low: {complianceResult.lowCount}</span>
+                      <span className="text-rose-400 font-bold">Unresolved Critical: {complianceResult.unresolvedCriticalCount ?? complianceResult.criticalCount} (Max: {complianceResult.maxCriticalAllowed})</span>
+                      <span className="text-amber-400 font-bold">Unresolved High: {complianceResult.unresolvedHighCount ?? complianceResult.highCount} (Max: {complianceResult.maxHighAllowed})</span>
+                      <span className="text-emerald-400 font-semibold">Resolved / Mitigated: {complianceResult.totalResolvedCount ?? 0}</span>
+                      <span className="text-slate-400">Total Findings: {complianceResult.totalFindings}</span>
                     </div>
                   </div>
                 </div>
@@ -524,242 +611,225 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
             </div>
           )}
 
-          {/* Query Builder Form & Payload Preview */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            
-            {/* Left: Input Form (7 cols) */}
-            <div className="lg:col-span-7 bg-white dark:bg-slate-900 rounded-2xl p-6 shadow-sm border border-slate-200 dark:border-slate-800 space-y-5">
-              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-                <div className="flex items-center gap-2">
-                  <Terminal className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+          {/* Query Builder Form */}
+          <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 shadow-sm border border-slate-200 dark:border-slate-800 space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Terminal className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                <div>
                   <h2 className="font-bold text-slate-900 dark:text-slate-100 text-base">
                     Construct ArmorCode Query Parameters
                   </h2>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Filter vulnerability scans by Product, Repositories, Branch, and Scanner Types.
+                  </p>
                 </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleRunQuery}
+                  disabled={isLoading}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md shadow-emerald-600/20 flex items-center gap-2 transition-all cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+                  <span>{isLoading ? 'Querying...' : 'Query Findings'}</span>
+                </button>
                 <button
                   onClick={() => setShowSchemaMappingInfo(!showSchemaMappingInfo)}
-                  className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer font-medium"
+                  className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer font-medium px-2 py-1"
                 >
                   <Settings className="w-3.5 h-3.5" />
                   <span>Config Info</span>
                 </button>
               </div>
+            </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {/* Project Name (Searchable Product Dropdown) */}
-                <div className="space-y-1.5 sm:col-span-2">
-                  <SearchableSelect
-                    label="Project Name (ArmorCode Product)"
-                    value={projectName}
-                    onChange={(val) => {
-                      setProjectName(val);
-                    }}
-                    onSearchChange={(query) => {
-                      loadArmorCodeProducts(query);
-                    }}
-                    options={productsOptions}
-                    placeholder="Type to search or select ArmorCode product..."
-                    isLoading={isFetchingProducts}
-                    onRefresh={() => loadArmorCodeProducts(projectName || '')}
-                    required={true}
-                    iconType="product"
-                    badgeText={productsSource === 'LIVE_API' ? 'ArmorCode Elastic API (Live)' : 'ArmorCode Catalog'}
-                    helpText="Searches live in real-time against POST https://app.armorcode.com/user/product/elastic/paged as you type."
-                  />
-                  {applications.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Quick App Shortcuts:</span>
-                      {applications.slice(0, 5).map((app) => (
-                        <button
-                          key={app.id}
-                          type="button"
-                          onClick={() => handleSelectAppSuggestion(app)}
-                          className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-slate-600 dark:text-slate-400 hover:text-indigo-700 dark:hover:text-indigo-300 text-[11px] font-mono transition-all cursor-pointer border border-slate-200 dark:border-slate-700"
-                        >
-                          + {app.name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Repository Name (Searchable Subproduct Dropdown) */}
-                <div className="space-y-1.5">
-                  <SearchableSelect
-                    label="Repository Name (Subproduct)"
-                    value={repositoryName}
-                    onChange={(val) => setRepositoryName(val)}
-                    options={subproductsOptions}
-                    placeholder={`e.g. ${projectName}_repo (or leave empty for ALL)`}
-                    isLoading={isFetchingSubproducts}
-                    onRefresh={() => loadArmorCodeSubproducts(projectName)}
-                    required={false}
-                    iconType="repository"
-                    badgeText={subproductsSource === 'LIVE_API' ? 'ArmorCode API /api/subproduct' : 'ArmorCode Catalog'}
-                    helpText="Fetches repositories live from https://app.armorcode.com/api/subproduct."
-                  />
-                </div>
-
-                {/* Branch Name */}
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                    Branch Name <span className="text-slate-600 dark:text-slate-400 font-normal">(cycode_branch)</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={branchName}
-                    onChange={(e) => setBranchName(e.target.value)}
-                    placeholder="e.g. master, main, release/v2"
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-mono text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                  />
-                  <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-tight">
-                    Branch identifier for scanner findings.
-                  </p>
-                </div>
-              </div>
-
-              {/* Scan Types */}
-              <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-                <label className="text-xs font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
-                  <span>Security Report Scanner Types</span>
-                  <span className="text-[11px] font-normal text-slate-600 dark:text-slate-400">
-                    {selectedTypes.length} selected
-                  </span>
-                </label>
-                
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {supportedFindingTypes.map((t) => {
-                    const isSelected = selectedTypes.includes(t.id);
-                    return (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {/* Project Name (Searchable Product Dropdown) */}
+              <div className="space-y-1.5 md:col-span-2 lg:col-span-1">
+                <SearchableSelect
+                  label="Project Name (ArmorCode Product)"
+                  value={projectName}
+                  onChange={(val, selectedOpt) => {
+                    setProjectName(val);
+                    if (selectedOpt?.id) {
+                      setSelectedProductId(String(selectedOpt.id));
+                      loadArmorCodeSubproducts(String(selectedOpt.id));
+                    } else {
+                      const matched = productsOptions.find(p => p.name.toLowerCase() === val.toLowerCase());
+                      if (matched && matched.id) {
+                        setSelectedProductId(String(matched.id));
+                        loadArmorCodeSubproducts(String(matched.id));
+                      }
+                    }
+                  }}
+                  onSearchChange={(query) => {
+                    loadArmorCodeProducts(query);
+                  }}
+                  options={productsOptions}
+                  placeholder="Type to search or select ArmorCode product..."
+                  isLoading={isFetchingProducts}
+                  onRefresh={() => loadArmorCodeProducts(projectName || '')}
+                  required={true}
+                  iconType="product"
+                  badgeText={productsSource === 'LIVE_API' ? 'ArmorCode Elastic API (Live)' : 'ArmorCode Catalog'}
+                  helpText="Searches live in real-time against POST https://app.armorcode.com/user/product/elastic/paged as you type."
+                />
+                {applications.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Quick App Shortcuts:</span>
+                    {applications.slice(0, 5).map((app) => (
                       <button
-                        key={t.id}
+                        key={app.id}
                         type="button"
-                        onClick={() => handleToggleType(t.id)}
-                        className={`p-2.5 rounded-xl border text-left flex items-start justify-between transition-all cursor-pointer ${
-                          isSelected
-                            ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-300 dark:border-indigo-700 text-indigo-900 dark:text-indigo-200'
-                            : 'bg-slate-50 dark:bg-slate-950/40 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 opacity-70 hover:opacity-100'
-                        }`}
+                        onClick={() => handleSelectAppSuggestion(app)}
+                        className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-slate-600 dark:text-slate-400 hover:text-indigo-700 dark:hover:text-indigo-300 text-[11px] font-mono transition-all cursor-pointer border border-slate-200 dark:border-slate-700"
                       >
-                        <div>
-                          <span className="text-xs font-bold uppercase font-mono block">{t.id}</span>
-                          <span className="text-[11px] leading-tight block text-slate-600 dark:text-slate-400 truncate">{t.category}</span>
-                        </div>
-                        <div className={`w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold border ${
-                          isSelected ? 'bg-indigo-600 text-white border-indigo-600' : 'border-slate-400'
-                        }`}>
-                          {isSelected ? '✓' : ''}
-                        </div>
+                        + {app.name}
                       </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Advanced Settings Toggle */}
-              <div className="pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAdvancedConfig(!showAdvancedConfig)}
-                  className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                  <span>{showAdvancedConfig ? 'Hide Custom Endpoint Settings' : 'Configure Custom Endpoint & Bearer Token'}</span>
-                  {showAdvancedConfig ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                </button>
-
-                {showAdvancedConfig && (
-                  <div className="mt-3 p-4 rounded-xl bg-slate-900 text-slate-200 space-y-3 text-xs border border-slate-800">
-                    <div className="space-y-1">
-                      <label className="font-mono text-slate-300 font-bold block">ArmorCode API Endpoint URL</label>
-                      <input
-                        type="text"
-                        value={customEndpoint}
-                        onChange={(e) => setCustomEndpoint(e.target.value)}
-                        className="w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="font-mono text-slate-300 font-bold block">API Auth Bearer Token</label>
-                      <input
-                        type="password"
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
-                        placeholder="Enter ArmorCode API token..."
-                        className="w-full px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-slate-100 font-mono text-xs"
-                      />
-                    </div>
+                    ))}
                   </div>
                 )}
               </div>
-            </div>
 
-            {/* Right: Code & Payload Preview (5 cols) */}
-            <div className="lg:col-span-5 bg-slate-900 rounded-2xl p-5 shadow-lg border border-slate-800 flex flex-col justify-between space-y-4">
-              <div className="space-y-3">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
-                  <div className="flex items-center gap-2">
-                    <Code2 className="w-4 h-4 text-emerald-400" />
-                    <span className="font-mono text-xs font-bold text-slate-200">
-                      Target API POST Request
+              {/* Repository Names (Multi-Select Searchable Subproduct Dropdown) */}
+              <div className="space-y-1.5 md:col-span-2 lg:col-span-1">
+                <MultiSearchableSelect
+                  label="Repository Names (Subproducts)"
+                  values={selectedRepositories}
+                  onChange={(vals) => setSelectedRepositories(vals)}
+                  onSearchChange={(query) => {
+                    loadArmorCodeSubproducts(selectedProductId || projectName, query);
+                  }}
+                  options={subproductsOptions}
+                  placeholder="Select repositories or type to search..."
+                  selectAllLabel="Select All Repositories"
+                  isLoading={isFetchingSubproducts}
+                  onRefresh={() => loadArmorCodeSubproducts(selectedProductId || projectName)}
+                  required={false}
+                  iconType="repository"
+                  badgeText={subproductsSource === 'LIVE_API' ? 'ArmorCode Dashboard Sub-Product API' : 'ArmorCode Catalog'}
+                  helpText={`Queries repositories live via POST https://app.armorcode.com/api/dashboard/sub-product/name-id${selectedProductId ? ` (Product ID: ${selectedProductId})` : ''}.`}
+                />
+                {subproductsOptions.length > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-1.5 pt-0.5 text-[11px]">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const allNames = subproductsOptions.map(opt => opt.name);
+                          setSelectedRepositories(allNames);
+                        }}
+                        className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/70 hover:bg-indigo-100 dark:hover:bg-indigo-900/90 text-indigo-700 dark:text-indigo-300 font-medium transition-all cursor-pointer border border-indigo-200 dark:border-indigo-800"
+                      >
+                        ✓ Select All ({subproductsOptions.length})
+                      </button>
+                      {selectedRepositories.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedRepositories([])}
+                          className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/50 text-slate-600 dark:text-slate-400 hover:text-rose-600 font-medium transition-all cursor-pointer border border-slate-200 dark:border-slate-700"
+                        >
+                          ✕ Clear (Query All)
+                        </button>
+                      )}
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-500">
+                      {selectedRepositories.length === 0 ? 'Will scan ALL repositories' : `${selectedRepositories.length} selected`}
                     </span>
                   </div>
-                  <span className="text-[10px] font-mono text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded border border-emerald-800">
-                    JSON POST
-                  </span>
-                </div>
+                )}
+              </div>
 
-                {/* Target URL */}
-                <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800/80 font-mono text-[11px] text-slate-300 break-all space-y-1">
-                  <span className="text-[10px] uppercase text-slate-500 font-bold block">Endpoint URL</span>
-                  <span className="text-emerald-400 font-bold">{customEndpoint || 'https://app.armorcode.com/api/findings'}</span>
-                </div>
+              {/* Branch Name */}
+              <div className="space-y-1.5 md:col-span-2 lg:col-span-1">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Branch Name <span className="text-slate-600 dark:text-slate-400 font-normal">(cycode_branch)</span>
+                </label>
+                <input
+                  type="text"
+                  value={branchName}
+                  onChange={(e) => setBranchName(e.target.value)}
+                  placeholder="e.g. master, main, release/v2"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-mono text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                />
+                <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-tight">
+                  Branch identifier for scanner findings.
+                </p>
+              </div>
+            </div>
 
-                {/* Constructed JSON Payload */}
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
-                    <span>Constructed Request Body</span>
+            {/* Scan Types */}
+            <div className="space-y-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Security Report Scanner Types ({selectedTypes.length}/10)
+                </label>
+                <div className="flex items-center gap-1.5 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTypes(supportedFindingTypes.map(t => t.id))}
+                    className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/70 hover:bg-indigo-100 dark:hover:bg-indigo-900 text-indigo-700 dark:text-indigo-300 font-medium transition-all cursor-pointer border border-indigo-200 dark:border-indigo-800"
+                  >
+                    ✓ Select All (10)
+                  </button>
+                  {selectedTypes.length > 0 && (
                     <button
                       type="button"
-                      onClick={() => copyToClipboard(JSON.stringify(constructedPayload, null, 2), false)}
-                      className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer"
+                      onClick={() => setSelectedTypes(['SAST', 'SCA', 'Secrets'])}
+                      className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/50 text-slate-600 dark:text-slate-400 hover:text-rose-600 font-medium transition-all cursor-pointer border border-slate-200 dark:border-slate-700"
                     >
-                      {copiedPayload ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                      <span>{copiedPayload ? 'Copied' : 'Copy JSON'}</span>
+                      Reset Defaults (SAST, SCA, Secrets)
                     </button>
-                  </div>
-                  <pre className="bg-slate-950 p-3 rounded-xl border border-slate-800 font-mono text-xs text-amber-300/90 overflow-x-auto leading-relaxed max-h-48 scrollbar-thin">
-{JSON.stringify(constructedPayload, null, 2)}
-                  </pre>
+                  )}
                 </div>
-
-                {/* cURL Command snippet */}
-                <div className="space-y-1 pt-1">
-                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
-                    <span>cURL Snippet</span>
+              </div>
+              
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+                {supportedFindingTypes.map((t) => {
+                  const isSelected = selectedTypes.includes(t.id);
+                  return (
                     <button
+                      key={t.id}
                       type="button"
-                      onClick={() => copyToClipboard(curlCommand, true)}
-                      className="text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer"
+                      onClick={() => handleToggleType(t.id)}
+                      className={`p-2.5 rounded-xl border text-left flex items-start justify-between transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-300 dark:border-indigo-700 text-indigo-900 dark:text-indigo-200'
+                          : 'bg-slate-50 dark:bg-slate-950/40 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 opacity-70 hover:opacity-100'
+                      }`}
                     >
-                      {copiedCurl ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                      <span>{copiedCurl ? 'Copied' : 'Copy cURL'}</span>
+                      <div>
+                        <span className="text-xs font-bold uppercase font-mono block">{t.id}</span>
+                        <span className="text-[11px] leading-tight block text-slate-600 dark:text-slate-400 truncate">{t.category}</span>
+                      </div>
+                      <div className={`w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold border ${
+                        isSelected ? 'bg-indigo-600 text-white border-indigo-600' : 'border-slate-400'
+                      }`}>
+                        {isSelected ? '✓' : ''}
+                      </div>
                     </button>
-                  </div>
-                  <pre className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 font-mono text-[10px] text-slate-400 overflow-x-auto leading-tight">
-{curlCommand}
-                  </pre>
-                </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Bottom Action Bar */}
+            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>ArmorCode Security Gates active with zero-tolerance policy for Critical/High issues.</span>
               </div>
 
               <button
                 type="button"
                 onClick={handleRunQuery}
                 disabled={isLoading}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all cursor-pointer"
+                className="sm:self-end px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all cursor-pointer"
               >
                 <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-                <span>Send POST Request to ArmorCode</span>
+                <span>{isLoading ? 'Querying ArmorCode...' : 'Query Security Findings'}</span>
               </button>
             </div>
           </div>
@@ -772,8 +842,17 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                 <span className="text-xl font-black text-slate-900 dark:text-slate-100 mt-1 block">{rawFindings.length}</span>
               </div>
               <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-rose-200 dark:border-rose-900/40 shadow-xs">
-                <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 uppercase tracking-wider block">Critical & High</span>
-                <span className="text-xl font-black text-rose-600 dark:text-rose-400 mt-1 block">{criticalCount + highCount}</span>
+                <span className="text-[10px] font-bold text-rose-600 dark:text-rose-400 uppercase tracking-wider block">Unresolved Crit/High</span>
+                <div className="flex items-baseline gap-2 mt-1">
+                  <span className="text-xl font-black text-rose-600 dark:text-rose-400">{unresolvedCriticalHighCount}</span>
+                  {unresolvedCriticalHighCount > 0 && (
+                    <span className="text-[10px] font-bold text-rose-500 font-mono">BLOCKING</span>
+                  )}
+                </div>
+              </div>
+              <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-900/40 shadow-xs">
+                <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider block">Resolved / Mitigated</span>
+                <span className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-1 block">{totalResolvedCount}</span>
               </div>
               <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
                 <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider block">SAST Code</span>
@@ -786,10 +865,6 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
               <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
                 <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider block">Secrets Leaked</span>
                 <span className="text-xl font-black text-amber-600 dark:text-amber-400 mt-1 block">{secretCount}</span>
-              </div>
-              <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
-                <span className="text-[10px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider block">DAST Dynamic</span>
-                <span className="text-xl font-black text-purple-600 dark:text-purple-400 mt-1 block">{dastCount}</span>
               </div>
             </div>
           )}
@@ -805,12 +880,25 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Search findings by ID, description, tool, or remediation..."
+                  placeholder="Search findings by ID, description, tool, status, or remediation..."
                   className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={selectedStatusFilter}
+                  onChange={(e) => setSelectedStatusFilter(e.target.value)}
+                  className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-slate-200 outline-none font-medium cursor-pointer"
+                >
+                  <option value="ALL">All Finding Statuses</option>
+                  <option value="BLOCKING">Unresolved Critical/High (Blocking)</option>
+                  <option value="UNRESOLVED">All Unresolved (Open / In Progress)</option>
+                  <option value="RESOLVED">Resolved / Mitigated / Fixed</option>
+                  <option value="OPEN">Status: OPEN</option>
+                  <option value="MITIGATED">Status: MITIGATED</option>
+                </select>
+
                 <select
                   value={selectedSeverityFilter}
                   onChange={(e) => setSelectedSeverityFilter(e.target.value)}
@@ -855,27 +943,29 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                 <thead>
                   <tr className="bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-400 text-[10px] font-bold uppercase tracking-wider font-mono border-b border-slate-200 dark:border-slate-800">
                     <th className="py-3 px-4">Finding ID</th>
+                    <th className="py-3 px-4">Risk Score</th>
                     <th className="py-3 px-4">Severity</th>
-                    <th className="py-3 px-4">Type</th>
-                    <th className="py-3 px-4">Description</th>
-                    <th className="py-3 px-4">Repository / Branch</th>
+                    <th className="py-3 px-4">Scan Type</th>
+                    <th className="py-3 px-4">Title & Context</th>
+                    <th className="py-3 px-4">Repo & Branch</th>
+                    <th className="py-3 px-4">Status</th>
                     <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-xs">
                   {isLoading ? (
                     <tr>
-                      <td colSpan={6} className="py-12 text-center text-slate-600 dark:text-slate-400 font-mono">
+                      <td colSpan={8} className="py-12 text-center text-slate-600 dark:text-slate-400 font-mono">
                         <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-500" />
                         <span>Querying ArmorCode API Endpoint...</span>
                       </td>
                     </tr>
                   ) : filteredFindings.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-12 text-center text-slate-600 dark:text-slate-400">
+                      <td colSpan={8} className="py-12 text-center text-slate-600 dark:text-slate-400">
                         <ShieldAlert className="w-8 h-8 text-slate-400 mx-auto mb-2" />
                         <p className="font-bold text-sm text-slate-700 dark:text-slate-300">No security findings returned</p>
-                        <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">Try adjusting your project name, repository, or scan type filters.</p>
+                        <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">Try adjusting your status, product, subproduct, or scan type filters.</p>
                       </td>
                     </tr>
                   ) : (
@@ -888,23 +978,62 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                           ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 border-rose-300'
                           : severityUpper === 'HIGH'
                           ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300 border-amber-300'
+                          : severityUpper === 'MEDIUM'
+                          ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-950/80 dark:text-yellow-300 border-yellow-300'
                           : 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300 border-slate-300';
 
-                      const typeUpper = (finding.type || 'sast').toUpperCase();
-                      const typeBg =
-                        typeUpper === 'SAST'
-                          ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300'
-                          : typeUpper === 'SCA'
-                          ? 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
-                          : typeUpper === 'SECRET'
-                          ? 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300'
-                          : 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300';
+                      const scanTypeDisplay = finding.scanType || finding.type || 'SAST';
+                      
+                      // Score formatting (supports both 0-10 and 0-1000 scales)
+                      const rawScore = finding.riskScore !== undefined ? finding.riskScore : finding.findingScore;
+                      const scoreDisplay = rawScore !== undefined ? (rawScore >= 100 ? String(Math.round(rawScore)) : Number(rawScore).toFixed(1)) : undefined;
+                      const isScoreHigh = rawScore !== undefined && (rawScore >= 500 || rawScore >= 7.5);
+                      const isScoreCritical = rawScore !== undefined && (rawScore >= 600 || rawScore >= 9.0);
+                      const riskScoreBg = isScoreCritical 
+                        ? 'bg-rose-600 text-white' 
+                        : isScoreHigh 
+                        ? 'bg-amber-500 text-slate-950 font-bold' 
+                        : 'bg-slate-700 text-slate-100';
+
+                      const statusUpper = (finding.status || finding.ticketStatus || 'OPEN').toUpperCase();
+                      const isResolved = isFindingResolved(finding);
+                      const isBlockingGate = !isResolved && (severityUpper === 'CRITICAL' || severityUpper === 'HIGH');
+                      
+                      const statusBg = isResolved
+                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800'
+                        : isBlockingGate
+                        ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/80 dark:text-rose-300 border-rose-300 dark:border-rose-800'
+                        : 'bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300 border-amber-300 dark:border-amber-800';
+
+                      const findingTitle = finding.title || finding.description?.split('\n')[0].replace(/^\*\*Policy name:\*\*\s*/, '') || 'Security Finding';
 
                       return (
                         <React.Fragment key={finding.finding_id}>
                           <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                             <td className="py-3 px-4 font-mono font-bold text-slate-900 dark:text-slate-100 whitespace-nowrap">
-                              {finding.finding_id}
+                              <div className="flex items-center gap-1.5">
+                                <span>{finding.finding_id}</span>
+                                {finding.findingUrl && (
+                                  <a
+                                    href={finding.findingUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+                                    title="Open in ArmorCode"
+                                  >
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              {scoreDisplay ? (
+                                <span className={`px-2 py-0.5 rounded-full font-mono text-[11px] font-black shadow-xs ${riskScoreBg}`}>
+                                  {scoreDisplay}
+                                </span>
+                              ) : (
+                                <span className="font-mono text-slate-400 text-[11px]">-</span>
+                              )}
                             </td>
                             <td className="py-3 px-4 whitespace-nowrap">
                               <span className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold border ${severityBg}`}>
@@ -912,21 +1041,44 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                               </span>
                             </td>
                             <td className="py-3 px-4 whitespace-nowrap">
-                              <span className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold ${typeBg}`}>
-                                {typeUpper}
+                              <span className="px-2 py-0.5 rounded font-mono text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                                {scanTypeDisplay}
                               </span>
                             </td>
                             <td className="py-3 px-4 text-slate-800 dark:text-slate-200 font-medium max-w-md">
-                              <p className="line-clamp-2">{finding.description}</p>
-                              {finding.tool && (
-                                <span className="text-[10px] text-slate-600 dark:text-slate-400 font-mono block mt-0.5">
-                                  Scanner: {finding.tool} {finding.cve_id ? `(${finding.cve_id})` : ''}
-                                </span>
-                              )}
+                              <p className="font-bold text-slate-900 dark:text-slate-100 text-xs line-clamp-1">{findingTitle}</p>
+                              <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                                {finding.tool && (
+                                  <span className="text-[10px] text-slate-600 dark:text-slate-400 font-mono">
+                                    Source: <strong>{finding.tool}</strong>
+                                  </span>
+                                )}
+                                {finding.cve_id && (
+                                  <span className="text-[10px] font-mono px-1.5 py-0.2 bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 rounded border border-rose-200 dark:border-rose-800">
+                                    {finding.cve_id}
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="py-3 px-4 font-mono text-slate-600 dark:text-slate-400 whitespace-nowrap">
                               <p className="text-slate-900 dark:text-slate-200 font-bold">{finding.repository || repositoryName || 'All Repos'}</p>
-                              <p className="text-[10px] text-indigo-600 dark:text-indigo-400">{finding.cycode_branch || branchName}</p>
+                              <p className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold">{finding.cycode_branch || branchName}</p>
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <div className="flex flex-col gap-0.5">
+                                <span className={`text-[10px] font-mono px-2 py-0.5 rounded border font-bold inline-block text-center ${statusBg}`}>
+                                  {statusUpper}
+                                </span>
+                                {isBlockingGate ? (
+                                  <span className="text-[9px] font-mono font-bold text-rose-600 dark:text-rose-400">
+                                    ✕ Blocks Promotion
+                                  </span>
+                                ) : isResolved ? (
+                                  <span className="text-[9px] font-mono font-medium text-emerald-600 dark:text-emerald-400">
+                                    ✓ Mitigated / Safe
+                                  </span>
+                                ) : null}
+                              </div>
                             </td>
                             <td className="py-3 px-4 text-right whitespace-nowrap">
                               <button
@@ -941,22 +1093,83 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                           {/* Expandable Remediation Row */}
                           {isExpanded && (
                             <tr className="bg-slate-50 dark:bg-slate-950/80 border-b border-slate-200 dark:border-slate-800">
-                              <td colSpan={6} className="p-4 space-y-3">
-                                <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2">
-                                  <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2">
+                              <td colSpan={8} className="p-4 space-y-3">
+                                <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-2">
                                     <span className="font-bold text-xs text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
                                       <Bug className="w-4 h-4 text-rose-500" />
-                                      <span>Remediation Guidance & Location</span>
+                                      <span>Remediation Guidance & Vulnerability Context</span>
                                     </span>
-                                    {finding.file_path && (
-                                      <span className="text-[11px] font-mono text-indigo-600 dark:text-indigo-400">
-                                        {finding.file_path}:{finding.line_number || 1}
-                                      </span>
+                                    <div className="flex items-center gap-2 text-[11px] font-mono">
+                                      {scoreDisplay && (
+                                        <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                                          Risk Score: <strong>{scoreDisplay}</strong>
+                                        </span>
+                                      )}
+                                      {finding.file_path && (
+                                        typeof finding.raw_file_path === 'string' && finding.raw_file_path.startsWith('http') ? (
+                                          <a
+                                            href={finding.raw_file_path}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
+                                          >
+                                            <span>{finding.file_path}:{finding.line_number || 1}</span>
+                                            <ExternalLink className="w-3 h-3" />
+                                          </a>
+                                        ) : (
+                                          <span className="text-indigo-600 dark:text-indigo-400">
+                                            {finding.file_path}:{finding.line_number || 1}
+                                          </span>
+                                        )
+                                      )}
+                                    </div>
+                                  </div>
+                                  
+                                  <div className="space-y-1.5 text-xs text-slate-700 dark:text-slate-300 leading-relaxed font-sans">
+                                    <p>
+                                      <strong>Remediation / Actionable Step:</strong> {finding.remediation}
+                                    </p>
+                                    {finding.description && finding.description !== finding.remediation && (
+                                      <div className="bg-slate-50 dark:bg-slate-950 p-2.5 rounded-lg border border-slate-100 dark:border-slate-800 text-[11px] font-mono text-slate-600 dark:text-slate-400 whitespace-pre-wrap">
+                                        {finding.description}
+                                      </div>
                                     )}
                                   </div>
-                                  <p className="text-xs text-slate-700 dark:text-slate-300 leading-relaxed font-sans">
-                                    <strong>Actionable Step:</strong> {finding.remediation}
-                                  </p>
+
+                                  <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs">
+                                    <div className="flex items-center gap-2">
+                                      {finding.cve_id && (
+                                        <span className="text-[11px] font-mono text-slate-500">
+                                          Reference / CVE: <span className="text-rose-500 font-bold">{finding.cve_id}</span>
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      {finding.url && (
+                                        <a
+                                          href={finding.url}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-medium text-[11px] flex items-center gap-1 transition-all"
+                                        >
+                                          <span>Open in {finding.tool || 'Scanner'}</span>
+                                          <ExternalLink className="w-3 h-3" />
+                                        </a>
+                                      )}
+                                      {finding.findingUrl && (
+                                        <a
+                                          href={finding.findingUrl}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="px-2.5 py-1 rounded bg-indigo-50 dark:bg-indigo-950/80 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 font-medium text-[11px] flex items-center gap-1 transition-all"
+                                        >
+                                          <span>Open in ArmorCode</span>
+                                          <ExternalLink className="w-3 h-3" />
+                                        </a>
+                                      )}
+                                    </div>
+                                  </div>
                                 </div>
                               </td>
                             </tr>
@@ -1353,6 +1566,54 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
               <div className="pt-2 text-slate-300 font-sans space-y-1">
                 <p className="text-[11px]"><strong>Sign-off Rationale:</strong> {viewingEvidence.approvalNotes}</p>
                 <p className="text-[10px] text-slate-500 font-mono">Issued at: {new Date(viewingEvidence.createdAt).toUTCString()}</p>
+              </div>
+            </div>
+
+            {/* Saved API Response Snapshot Viewer */}
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800/80 space-y-3 text-xs">
+              <div className="flex justify-between items-center border-b border-slate-800 pb-2">
+                <div className="flex items-center gap-2">
+                  <Terminal className="w-4 h-4 text-emerald-400" />
+                  <span className="font-bold text-slate-200 font-mono text-[11px]">
+                    Saved ArmorCode API Response Snapshot
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800/60 font-bold">
+                    HTTP 200 OK
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const dataToCopy = viewingEvidence.apiResponseSnapshot || {
+                        results: viewingEvidence.snapshotFindings,
+                        payload: viewingEvidence.snapshotPayload,
+                        endpoint: viewingEvidence.apiEndpointUsed
+                      };
+                      navigator.clipboard.writeText(JSON.stringify(dataToCopy, null, 2));
+                      alert('API Response Snapshot JSON copied to clipboard!');
+                    }}
+                    className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-mono flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>Copy Raw JSON</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="text-[11px] text-slate-400 font-mono flex flex-wrap items-center gap-x-4 gap-y-1">
+                <span>Endpoint: <code className="text-indigo-400">{viewingEvidence.apiEndpointUsed || 'https://app.armorcode.com/user/findings/'}</code></span>
+                <span>Snapshot Findings Count: <strong className="text-emerald-400">{viewingEvidence.snapshotFindings?.length ?? viewingEvidence.findingCounts.total}</strong></span>
+              </div>
+
+              <div className="max-h-48 overflow-y-auto bg-slate-900/90 rounded-lg p-3 border border-slate-800 text-[10px] font-mono text-slate-300">
+                <pre className="whitespace-pre-wrap">
+                  {JSON.stringify(viewingEvidence.apiResponseSnapshot || {
+                    query: viewingEvidence.snapshotPayload,
+                    findingsCount: viewingEvidence.snapshotFindings?.length || 0,
+                    findings: viewingEvidence.snapshotFindings || []
+                  }, null, 2)}
+                </pre>
               </div>
             </div>
 

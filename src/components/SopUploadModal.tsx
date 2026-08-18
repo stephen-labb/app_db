@@ -30,7 +30,7 @@ export const SopUploadModal: React.FC<SopUploadModalProps> = ({
   const [version, setVersion] = useState('v2.5');
   const [title, setTitle] = useState('AppSec Application Criticality Standard Operating Procedure');
   const [changeSummary, setChangeSummary] = useState(
-    'Updated SOP with latest RTO/RPO expectations, IT team viewer guidelines, and annual re-assessment schedule.'
+    'Updated SOP with latest security criteria, IT team viewer guidelines, and annual re-assessment schedule.'
   );
   const [uploadedBy, setUploadedBy] = useState('AppSec Governance Team');
   const [content, setContent] = useState('');
@@ -145,7 +145,7 @@ export const SopUploadModal: React.FC<SopUploadModalProps> = ({
             <div>
               <h2 className="text-lg font-bold">Upload Latest AppSec SOP Document</h2>
               <p className="text-xs text-slate-400">
-                Publish updated Standard Operating Procedure for Application Criticality & IT SLAs
+                Publish updated Standard Operating Procedure for Application Criticality & Security Controls
               </p>
             </div>
           </div>
@@ -246,7 +246,7 @@ export const SopUploadModal: React.FC<SopUploadModalProps> = ({
               required
               value={changeSummary}
               onChange={(e) => setChangeSummary(e.target.value)}
-              placeholder="e.g. Updated Section 3 with PCI-DSS 4.0 mapping and modified RTO targets."
+              placeholder="e.g. Updated Section 3 with PCI-DSS 4.0 mapping and modified security criteria."
               className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs focus:bg-white focus:ring-2 focus:ring-emerald-500"
             />
           </div>

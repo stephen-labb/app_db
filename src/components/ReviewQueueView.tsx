@@ -11,8 +11,7 @@ import { checkDuplicateAppDetails } from '../utils/validation';
 import {
   calculateCriticalityScore,
   scoreToTier,
-  getTierBadgeProps,
-  getRecommendedSLAs
+  getTierBadgeProps
 } from '../utils/scoring';
 import {
   exportTicketsCSV
@@ -783,8 +782,8 @@ export const ReviewQueueView: React.FC<ReviewQueueViewProps> = ({
                 </div>
 
                 <div className="text-right text-xs text-indigo-200 space-y-0.5">
-                  <div>RTO SLA: <strong className="font-mono text-white">{selectedAssessment.rto}</strong></div>
-                  <div>RPO SLA: <strong className="font-mono text-white">{selectedAssessment.rpo}</strong></div>
+                  <div>Hosting: <strong className="text-white">{selectedAssessment.hostingEnv}</strong></div>
+                  <div>Exposure: <strong className="text-white">{selectedAssessment.internetExposed ? 'Internet Exposed' : 'Internal'}</strong></div>
                   <div>Data Class: <strong className="text-amber-300">{selectedAssessment.dataClassification}</strong></div>
                 </div>
               </div>

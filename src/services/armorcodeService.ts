@@ -63,17 +63,42 @@ export async function fetchArmorCodeProducts(
 }
 
 export async function fetchArmorCodeSubproducts(
+  productId?: string | number | (string | number)[],
   project?: string,
   apiKey?: string,
-  customEndpoint?: string
+  customEndpoint?: string,
+  search?: string
 ): Promise<ArmorCodeSubproductsResponse> {
+  const defaultEndpoint = appSettings.ArmorCode?.SubproductApiEndpoint || 'https://app.armorcode.com/api/dashboard/sub-product/name-id';
+  const targetEndpoint = customEndpoint || defaultEndpoint;
+
+  // Format productId as array of strings e.g. ["385162"]
+  const productIds: string[] = [];
+  if (Array.isArray(productId)) {
+    productId.forEach(id => {
+      if (id !== undefined && id !== null && String(id).trim()) {
+        productIds.push(String(id).trim());
+      }
+    });
+  } else if (productId !== undefined && productId !== null && String(productId).trim()) {
+    productIds.push(String(productId).trim());
+  }
+
+  const payload = {
+    productId: productIds,
+    project,
+    search,
+    apiKey,
+    customEndpoint: targetEndpoint
+  };
+
   try {
     const res = await fetch('/api/armorcode/subproducts', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ project, apiKey, customEndpoint }),
+      body: JSON.stringify(payload),
     });
 
     if (!res.ok) {
@@ -82,7 +107,7 @@ export async function fetchArmorCodeSubproducts(
         subproducts: [],
         source: 'FALLBACK',
         errorMessage: `HTTP ${res.status}: ${res.statusText}`,
-        endpointUsed: customEndpoint || appSettings.ArmorCode?.SubproductApiEndpoint || 'https://app.armorcode.com/api/subproduct'
+        endpointUsed: targetEndpoint
       };
     }
 
@@ -94,7 +119,7 @@ export async function fetchArmorCodeSubproducts(
       subproducts: [],
       source: 'FALLBACK',
       errorMessage: error.message || 'Failed to fetch ArmorCode subproducts',
-      endpointUsed: customEndpoint || appSettings.ArmorCode?.SubproductApiEndpoint || 'https://app.armorcode.com/api/subproduct'
+      endpointUsed: targetEndpoint
     };
   }
 }
@@ -141,28 +166,75 @@ export async function fetchArmorCodeFindings(
   }
 }
 
+export const DEFAULT_ARMORCODE_SCAN_TYPES = [
+  "SAST",
+  "SCA",
+  "Secrets"
+];
+
 export function constructArmorCodePayload(query: ArmorCodeQueryRequest): Record<string, any> {
-  const reqSchema = appSettings.ArmorCode?.RequestSchemaMapping || {
-    projectField: 'project',
-    repositoryField: 'repository',
-    branchField: 'cycode_branch'
+  // Extract product ID (number or string)
+  let productFilter: (number | string)[] = [];
+  if (query.productId !== undefined && query.productId !== '') {
+    const num = Number(query.productId);
+    productFilter = [!isNaN(num) && String(num) === String(query.productId).trim() ? num : query.productId];
+  } else if (query.project) {
+    const num = Number(query.project);
+    productFilter = [!isNaN(num) ? num : query.project];
+  }
+
+  // Extract subProduct IDs
+  let subProductFilter: (number | string)[] = [];
+  if (query.subProductIds && query.subProductIds.length > 0) {
+    subProductFilter = query.subProductIds.map(id => {
+      const num = Number(id);
+      return !isNaN(num) && String(num) === String(id).trim() ? num : id;
+    });
+  } else if (query.repositories && query.repositories.length > 0) {
+    subProductFilter = query.repositories.map(r => {
+      const num = Number(r);
+      return !isNaN(num) ? num : r;
+    });
+  } else if (query.repository && query.repository.trim() !== '') {
+    const num = Number(query.repository);
+    subProductFilter = [!isNaN(num) ? num : query.repository.trim()];
+  }
+
+  const rawBranch = (query.cycode_branch || 'main').replace(/^"|"$/g, '').trim();
+  const formattedBranchValue = `\"${rawBranch}\"`;
+  const branchKey = appSettings.ArmorCode?.DefaultBranchKey || '\"custom_cycode_branch\"';
+
+  // Construct filters object according to ArmorCode user/findings payload specification
+  const filters: Record<string, any> = {
+    product: productFilter,
+    ...(subProductFilter.length > 0 ? { subProduct: subProductFilter } : {}),
+    keyValue: [
+      {
+        key: branchKey,
+        value: formattedBranchValue
+      }
+    ],
+    scanType: query.scanTypes && query.scanTypes.length > 0 ? query.scanTypes : (appSettings.ArmorCode?.DefaultScanTypes || DEFAULT_ARMORCODE_SCAN_TYPES)
   };
 
   const payload: Record<string, any> = {
-    [reqSchema.projectField || 'project']: query.project || 'sample'
+    size: query.size || 100,
+    sortColumns: [
+      {
+        property: "riskScore",
+        direction: "desc"
+      }
+    ],
+    filters,
+    filterOperations: {},
+    page: query.page || 0,
+    ticketStatusRequired: true,
+    commentCountRequired: true,
+    addLastResolutionNote: false,
+    ignoreMitigated: null,
+    ignoreDuplicate: true,
+    timezone: query.timezone || appSettings.ArmorCode?.DefaultTimezone || "Asia/Shanghai"
   };
-
-  if (query.repository && query.repository.trim() !== '') {
-    payload[reqSchema.repositoryField || 'repository'] = query.repository.trim();
-  }
-
-  if (query.cycode_branch && query.cycode_branch.trim() !== '') {
-    payload[reqSchema.branchField || 'cycode_branch'] = query.cycode_branch.trim();
-  }
-
-  if (query.finding_types && query.finding_types.length > 0) {
-    payload['finding_types'] = query.finding_types;
-  }
 
   return payload;
 }
@@ -170,19 +242,21 @@ export function constructArmorCodePayload(query: ArmorCodeQueryRequest): Record<
 export function exportArmorCodeFindingsCSV(findings: ArmorCodeFinding[], projectName: string): void {
   if (!findings || findings.length === 0) return;
 
-  const headers = ['Finding ID', 'Type', 'Severity', 'Project', 'Repository', 'Branch', 'Description', 'Remediation', 'Tool', 'CVE / CWE', 'File Path'];
+  const headers = ['Finding ID', 'Type / ScanType', 'Severity', 'Risk Score', 'Project / Product', 'Repository / SubProduct', 'Branch', 'Description', 'Remediation', 'Tool', 'CVE / CWE', 'File Path', 'Ticket Status'];
   const rows = findings.map(f => [
     f.finding_id,
-    f.type.toUpperCase(),
+    (f.scanType || f.type || 'SAST').toUpperCase(),
     f.severity || 'MEDIUM',
-    f.project || projectName,
-    f.repository || 'N/A',
-    f.cycode_branch || 'master',
+    f.riskScore !== undefined ? String(f.riskScore) : 'N/A',
+    f.project || f.product || projectName,
+    f.repository || f.subProduct || 'N/A',
+    f.cycode_branch || 'main',
     `"${(f.description || '').replace(/"/g, '""')}"`,
     `"${(f.remediation || '').replace(/"/g, '""')}"`,
     f.tool || 'Cycode / ArmorCode Scanner',
     f.cve_id || 'N/A',
-    f.file_path ? `${f.file_path}:${f.line_number || 1}` : 'N/A'
+    f.file_path ? `${f.file_path}:${f.line_number || 1}` : 'N/A',
+    f.ticketStatus || f.status || 'OPEN'
   ]);
 
   const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');

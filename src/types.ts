@@ -84,8 +84,6 @@ export interface Application {
   ownerIT: string;
   hostingEnv: string;
   dataClassification: DataClassification;
-  rto: string; // Recovery Time Objective e.g. "15 Mins", "1 Hour"
-  rpo: string; // Recovery Point Objective e.g. "5 Mins", "1 Hour"
   internetExposed: boolean;
   isGamingNetwork?: boolean;
   thirdPartyIntegrations: string[];
@@ -140,8 +138,6 @@ export interface PendingAssessment {
   updatedAt: string;
   dataClassification: DataClassification;
   hostingEnv: string;
-  rto: string;
-  rpo: string;
   internetExposed: boolean;
   isGamingNetwork?: boolean;
   factors: CriticalityFactors;
@@ -313,7 +309,7 @@ export interface ActiveSsoUser {
 
 export interface ArmorCodeFinding {
   finding_id: string;
-  type: string; // 'sast' | 'sca' | 'secret' | 'dast' | 'iac' | 'container'
+  type: string; // 'sast' | 'sca' | 'secret' | 'dast' | 'iac' | 'container' or raw scanType
   severity?: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO' | string;
   description: string;
   remediation: string;
@@ -324,6 +320,13 @@ export interface ArmorCodeFinding {
   cve_id?: string;
   file_path?: string;
   line_number?: number;
+  riskScore?: number;
+  status?: string;
+  ticketStatus?: string;
+  scanType?: string;
+  subProduct?: string | number;
+  product?: string | number;
+  [key: string]: any;
 }
 
 export interface ArmorCodeProduct {
@@ -371,13 +374,21 @@ export interface ArmorCodeSubproductsResponse {
   source?: string;
   errorMessage?: string;
   endpointUsed?: string;
+  payloadSent?: any;
 }
 
 export interface ArmorCodeQueryRequest {
   project: string;
+  productId?: string | number;
   repository?: string;
+  repositories?: string[];
+  subProductIds?: (string | number)[];
   cycode_branch?: string;
   finding_types?: string[];
+  scanTypes?: string[];
+  size?: number;
+  page?: number;
+  timezone?: string;
   apiKey?: string;
   customEndpoint?: string;
 }
@@ -403,6 +414,13 @@ export interface ComplianceEvaluationResult {
   mediumCount: number;
   lowCount: number;
   infoCount: number;
+  unresolvedCriticalCount: number;
+  unresolvedHighCount: number;
+  unresolvedMediumCount: number;
+  resolvedCriticalCount: number;
+  resolvedHighCount: number;
+  totalUnresolvedCount: number;
+  totalResolvedCount: number;
   maxCriticalAllowed: number;
   maxHighAllowed: number;
   maxMediumAllowed: number;
@@ -431,9 +449,14 @@ export interface PromotionEvidence {
     medium: number;
     low: number;
     info: number;
+    unresolvedCritical?: number;
+    unresolvedHigh?: number;
+    resolvedCritical?: number;
+    resolvedHigh?: number;
   };
   snapshotFindings: ArmorCodeFinding[];
   snapshotPayload: Record<string, any>;
+  apiResponseSnapshot?: Record<string, any> | ArmorCodeQueryResponse;
   apiEndpointUsed: string;
   verificationHash: string; // HMAC / SHA256 style fingerprint
   signatureBadge: string; // e.g. "DIGITALLY_SIGNED_ARMORCODE_GATE_CERTIFICATE"

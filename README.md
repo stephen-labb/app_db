@@ -14,10 +14,10 @@ A full-stack enterprise application security posture management (ASPM) and criti
   - System Stability & New Development (10.0% weight)
   - System Downtime Impact (10.0% weight)
 - **4-Tier Classification System**:
-  - **Tier 1 (Critical)**: Score ≥ 9.0 (24h RTO / 1h RPO)
-  - **Tier 2 (High)**: Score 6.0 – 8.9 (48h RTO / 4h RPO)
-  - **Tier 3 (Medium)**: Score 3.0 – 5.9 (72h RTO / 12h RPO)
-  - **Tier 4 (Low)**: Score < 3.0 (168h RTO / 24h RPO)
+  - **Tier 1 (Critical)**: Score ≥ 9.0 (Continuous automated AppSec testing & 24h critical patch SLA)
+  - **Tier 2 (High)**: Score 6.0 – 8.9 (Bi-weekly security audit & 7-day critical patch SLA)
+  - **Tier 3 (Medium)**: Score 3.0 – 5.9 (Bi-annual vulnerability assessment & 30-day patch SLA)
+  - **Tier 4 (Low)**: Score < 3.0 (Annual automated vulnerability scan & 60-day patch SLA)
 - **Comprehensive Lifecycle Tracking**: Manage hosting environments, regulatory compliance mandates (PCI-DSS, SOC2, HIPAA, ISO27001), IT/AppSec owners, and third-party dependencies.
 - **Data Export & Backup**: Full database JSON backup/restore and CSV inventory export.
 
@@ -48,7 +48,7 @@ A full-stack enterprise application security posture management (ASPM) and criti
 ### 5. 🔐 Role-Based Access Control (RBAC) & Governance
 - **5 Built-in System Roles**:
   - `APPSEC_ADMIN`: Full administrative control over inventory, settings, SSO, and review queue.
-  - `IT_OPS_LEAD`: Operations management and RTO/RPO SLA oversight.
+  - `IT_OPS_LEAD`: Operations management and infrastructure oversight.
   - `APPLICATION_OWNER`: Self-assessment submissions and application management.
   - `COMPLIANCE_AUDITOR`: Read-only access to audit trails, SOPs, and promotion evidence certificates.
   - `READ_ONLY`: View-only dashboard access.

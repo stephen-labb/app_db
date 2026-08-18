@@ -10,7 +10,27 @@ import { addAuditLog } from '../utils/storage';
 const PROMOTION_STORAGE_KEY = 'appsec_armorcode_promotion_evidences_v1';
 
 /**
+ * Check if an ArmorCode finding is considered resolved / mitigated / false positive / accepted risk
+ */
+export function isFindingResolved(finding: ArmorCodeFinding): boolean {
+  if (finding.mitigated === true) return true;
+  const rawStatus = (finding.status || finding.ticketStatus || '').toUpperCase().trim();
+  return [
+    'MITIGATED',
+    'RESOLVED',
+    'FIXED',
+    'CLOSED',
+    'FALSE_POSITIVE',
+    'ACCEPTED_RISK',
+    'RESOLVED_MUTED',
+    'SUPPRESSED',
+    'WHITELISTED'
+  ].includes(rawStatus);
+}
+
+/**
  * Evaluate if ArmorCode scan findings meet the configured compliance standards for production promotion.
+ * Marked NON-COMPLIANT if there are any unresolved Critical or High findings.
  */
 export function evaluateCompliance(findings: ArmorCodeFinding[]): ComplianceEvaluationResult {
   const standards = appSettings.ArmorCode?.ComplianceStandards || {
@@ -23,36 +43,68 @@ export function evaluateCompliance(findings: ArmorCodeFinding[]): ComplianceEval
   };
 
   const totalFindings = findings.length;
-  const criticalCount = findings.filter(f => (f.severity || '').toUpperCase() === 'CRITICAL').length;
-  const highCount = findings.filter(f => (f.severity || '').toUpperCase() === 'HIGH').length;
-  const mediumCount = findings.filter(f => (f.severity || '').toUpperCase() === 'MEDIUM').length;
-  const lowCount = findings.filter(f => (f.severity || '').toUpperCase() === 'LOW').length;
-  const infoCount = findings.filter(f => (f.severity || '').toUpperCase() === 'INFO' || !f.severity).length;
+  const criticalFindings = findings.filter(f => (f.severity || '').toUpperCase() === 'CRITICAL');
+  const highFindings = findings.filter(f => (f.severity || '').toUpperCase() === 'HIGH');
+  const mediumFindings = findings.filter(f => (f.severity || '').toUpperCase() === 'MEDIUM');
+  const lowFindings = findings.filter(f => (f.severity || '').toUpperCase() === 'LOW');
+  const infoFindings = findings.filter(f => (f.severity || '').toUpperCase() === 'INFO' || !f.severity);
+
+  const unresolvedCriticalCount = criticalFindings.filter(f => !isFindingResolved(f)).length;
+  const unresolvedHighCount = highFindings.filter(f => !isFindingResolved(f)).length;
+  const unresolvedMediumCount = mediumFindings.filter(f => !isFindingResolved(f)).length;
+
+  const resolvedCriticalCount = criticalFindings.filter(f => isFindingResolved(f)).length;
+  const resolvedHighCount = highFindings.filter(f => isFindingResolved(f)).length;
+
+  const totalUnresolvedCount = findings.filter(f => !isFindingResolved(f)).length;
+  const totalResolvedCount = findings.filter(f => isFindingResolved(f)).length;
+
+  const criticalCount = criticalFindings.length;
+  const highCount = highFindings.length;
+  const mediumCount = mediumFindings.length;
+  const lowCount = lowFindings.length;
+  const infoCount = infoFindings.length;
 
   const reasons: string[] = [];
   const passedChecks: string[] = [];
   const rulesEvaluated: string[] = [
-    `Zero Critical Vulnerabilities Threshold (Max Allowed: ${standards.MaxCriticalFindings})`,
-    `Zero High Vulnerabilities Threshold (Max Allowed: ${standards.MaxHighFindings})`,
+    `Zero Unresolved Critical Vulnerabilities (Max Allowed: ${standards.MaxCriticalFindings})`,
+    `Zero Unresolved High Vulnerabilities (Max Allowed: ${standards.MaxHighFindings})`,
     `Medium Findings Advisory Ceiling (Max Allowed: ${standards.MaxMediumFindings})`
   ];
 
-  if (criticalCount > standards.MaxCriticalFindings) {
-    reasons.push(`Contains ${criticalCount} Critical severity finding(s) (Maximum allowed is ${standards.MaxCriticalFindings}).`);
+  if (unresolvedCriticalCount > standards.MaxCriticalFindings) {
+    reasons.push(
+      `Contains ${unresolvedCriticalCount} unresolved Critical severity finding(s) (Policy allows max ${standards.MaxCriticalFindings} unresolved Criticals).`
+    );
   } else {
-    passedChecks.push(`Passed Zero Critical Findings check (${criticalCount} found).`);
+    passedChecks.push(
+      resolvedCriticalCount > 0
+        ? `Zero unresolved Critical findings (${resolvedCriticalCount} mitigated/resolved in ticket backlog).`
+        : `Passed Zero Critical Findings check (0 critical findings found).`
+    );
   }
 
-  if (highCount > standards.MaxHighFindings) {
-    reasons.push(`Contains ${highCount} High severity finding(s) (Maximum allowed is ${standards.MaxHighFindings}).`);
+  if (unresolvedHighCount > standards.MaxHighFindings) {
+    reasons.push(
+      `Contains ${unresolvedHighCount} unresolved High severity finding(s) (Policy allows max ${standards.MaxHighFindings} unresolved Highs).`
+    );
   } else {
-    passedChecks.push(`Passed Zero High Findings check (${highCount} found).`);
+    passedChecks.push(
+      resolvedHighCount > 0
+        ? `Zero unresolved High findings (${resolvedHighCount} mitigated/resolved in ticket backlog).`
+        : `Passed Zero High Findings check (0 high findings found).`
+    );
   }
 
-  if (mediumCount > standards.MaxMediumFindings) {
-    reasons.push(`Contains ${mediumCount} Medium severity finding(s) exceeding threshold of ${standards.MaxMediumFindings}.`);
+  if (unresolvedMediumCount > standards.MaxMediumFindings) {
+    reasons.push(
+      `Contains ${unresolvedMediumCount} unresolved Medium severity finding(s) exceeding allowable threshold of ${standards.MaxMediumFindings}.`
+    );
   } else {
-    passedChecks.push(`Medium findings count (${mediumCount}) is within allowable limit (${standards.MaxMediumFindings}).`);
+    passedChecks.push(
+      `Unresolved Medium findings (${unresolvedMediumCount}) is within allowable threshold (${standards.MaxMediumFindings}).`
+    );
   }
 
   const isCompliant = reasons.length === 0;
@@ -66,6 +118,13 @@ export function evaluateCompliance(findings: ArmorCodeFinding[]): ComplianceEval
     mediumCount,
     lowCount,
     infoCount,
+    unresolvedCriticalCount,
+    unresolvedHighCount,
+    unresolvedMediumCount,
+    resolvedCriticalCount,
+    resolvedHighCount,
+    totalUnresolvedCount,
+    totalResolvedCount,
     maxCriticalAllowed: standards.MaxCriticalFindings ?? 0,
     maxHighAllowed: standards.MaxHighFindings ?? 0,
     maxMediumAllowed: standards.MaxMediumFindings ?? 20,
@@ -98,7 +157,8 @@ export function loadPromotionEvidences(): PromotionEvidence[] {
   try {
     const raw = localStorage.getItem(PROMOTION_STORAGE_KEY);
     if (!raw) return [];
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
   } catch (err) {
     console.error('Failed to load promotion evidences from localStorage:', err);
     return [];
@@ -109,25 +169,45 @@ export function loadPromotionEvidences(): PromotionEvidence[] {
  * Fetch evidences from backend server and merge with localStorage
  */
 export async function asyncFetchPromotionEvidences(): Promise<PromotionEvidence[]> {
+  const localList = loadPromotionEvidences();
   try {
     const res = await fetch('/api/promotion-evidences');
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.evidences)) {
-        localStorage.setItem(PROMOTION_STORAGE_KEY, JSON.stringify(data.evidences));
-        return data.evidences;
+        // Merge server and local list by evidenceId, keeping the most updated / newest
+        const map = new Map<string, PromotionEvidence>();
+        data.evidences.forEach((e: PromotionEvidence) => {
+          if (e && e.evidenceId) map.set(e.evidenceId, e);
+        });
+        localList.forEach((e: PromotionEvidence) => {
+          if (e && e.evidenceId && !map.has(e.evidenceId)) {
+            map.set(e.evidenceId, e);
+            // Sync locally created item to server in background
+            fetch('/api/promotion-evidences', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(e)
+            }).catch(() => {});
+          }
+        });
+        const merged = Array.from(map.values()).sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        localStorage.setItem(PROMOTION_STORAGE_KEY, JSON.stringify(merged));
+        return merged;
       }
     }
   } catch (err) {
     console.warn('Backend API fetch for promotion evidences failed, using localStorage:', err);
   }
-  return loadPromotionEvidences();
+  return localList;
 }
 
 /**
  * Save new promotion evidence snapshot into auditable storage & trigger audit log
  */
-export function createAndSavePromotionEvidence(
+export async function createAndSavePromotionEvidence(
   params: {
     project: string;
     repository: string;
@@ -140,12 +220,13 @@ export function createAndSavePromotionEvidence(
     complianceEvaluation: ComplianceEvaluationResult;
     snapshotFindings: ArmorCodeFinding[];
     snapshotPayload: Record<string, any>;
+    apiResponseSnapshot?: Record<string, any>;
     apiEndpointUsed: string;
     isAdminOverride?: boolean;
     applicationId?: string;
     applicationName?: string;
   }
-): PromotionEvidence {
+): Promise<PromotionEvidence> {
   const currentList = loadPromotionEvidences();
   const timestamp = new Date().toISOString();
   const randomSuffix = Math.floor(10000 + Math.random() * 90000);
@@ -179,9 +260,14 @@ export function createAndSavePromotionEvidence(
       medium: params.complianceEvaluation.mediumCount,
       low: params.complianceEvaluation.lowCount,
       info: params.complianceEvaluation.infoCount,
+      unresolvedCritical: params.complianceEvaluation.unresolvedCriticalCount,
+      unresolvedHigh: params.complianceEvaluation.unresolvedHighCount,
+      resolvedCritical: params.complianceEvaluation.resolvedCriticalCount,
+      resolvedHigh: params.complianceEvaluation.resolvedHighCount
     },
     snapshotFindings: params.snapshotFindings,
     snapshotPayload: params.snapshotPayload,
+    apiResponseSnapshot: params.apiResponseSnapshot,
     apiEndpointUsed: params.apiEndpointUsed,
     verificationHash,
     signatureBadge: 'DIGITALLY_SIGNED_ARMORCODE_GATE_STAMP',
@@ -190,15 +276,19 @@ export function createAndSavePromotionEvidence(
     applicationName: params.applicationName
   };
 
-  const updatedList = [newEvidence, ...currentList];
+  const updatedList = [newEvidence, ...currentList.filter(e => e.evidenceId !== evidenceId)];
   localStorage.setItem(PROMOTION_STORAGE_KEY, JSON.stringify(updatedList));
 
   // Sync to PostgreSQL / Server memory backend
-  fetch('/api/promotion-evidences', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(newEvidence)
-  }).catch(err => console.warn('Sync promotion evidence to server warning:', err));
+  try {
+    await fetch('/api/promotion-evidences', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newEvidence)
+    });
+  } catch (err) {
+    console.warn('Sync promotion evidence to server warning:', err);
+  }
 
   // Log in system Audit Trail
   addAuditLog(

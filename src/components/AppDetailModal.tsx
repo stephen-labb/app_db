@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Application, UserRole, PromotionEvidence } from '../types';
-import { getTierBadgeProps, getRecommendedSLAs } from '../utils/scoring';
+import { getTierBadgeProps } from '../utils/scoring';
 import {
   loadPromotionEvidences,
   asyncFetchPromotionEvidences,
@@ -9,7 +9,6 @@ import {
 import {
   X,
   Shield,
-  Clock,
   Server,
   Globe,
   Gamepad2,
@@ -58,14 +57,15 @@ export const AppDetailModal: React.FC<AppDetailModalProps> = ({
   if (!app) return null;
 
   const badgeProps = getTierBadgeProps(app.tier);
-  const recommendedSLA = getRecommendedSLAs(app.tier);
 
   // Filter promotion evidences mapped to this application
   const mappedEvidences = evidences.filter(ev =>
     ev.applicationId === app.id ||
     (ev.applicationName && ev.applicationName.toLowerCase() === app.name.toLowerCase()) ||
     ev.project.toLowerCase() === app.code.toLowerCase() ||
-    ev.project.toLowerCase() === app.name.toLowerCase()
+    ev.project.toLowerCase() === app.name.toLowerCase() ||
+    (ev.repository && ev.repository.toLowerCase().includes(app.code.toLowerCase())) ||
+    (ev.repository && ev.repository.toLowerCase().includes(app.name.toLowerCase().replace(/\s+/g, '-')))
   );
 
   return (
@@ -145,7 +145,7 @@ export const AppDetailModal: React.FC<AppDetailModalProps> = ({
           {activeTab === 'OVERVIEW' && (
             <>
               {/* Key Metric Highlights Banner */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs">
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase font-semibold">
                     Criticality Weighted Score
@@ -156,17 +156,10 @@ export const AppDetailModal: React.FC<AppDetailModalProps> = ({
                 </div>
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase font-semibold">
-                    IT RTO Target
+                    Hosting Environment
                   </span>
-                  <span className="text-sm font-bold text-slate-900 font-mono">{app.rto}</span>
-                  <span className="text-[10px] text-slate-500 block">Rec: {recommendedSLA.rto}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-[10px] uppercase font-semibold">
-                    IT RPO Target
-                  </span>
-                  <span className="text-sm font-bold text-slate-900 font-mono">{app.rpo}</span>
-                  <span className="text-[10px] text-slate-500 block">Rec: {recommendedSLA.rpo}</span>
+                  <span className="text-sm font-bold text-slate-900">{app.hostingEnv}</span>
+                  <span className="text-[10px] text-slate-500 block">{app.internetExposed ? 'Internet Exposed' : 'Internal Only'}</span>
                 </div>
                 <div>
                   <span className="text-slate-400 block text-[10px] uppercase font-semibold">
@@ -582,6 +575,36 @@ export const AppDetailModal: React.FC<AppDetailModalProps> = ({
               <div className="text-indigo-300 break-all">{viewingCert.verificationHash}</div>
               <div className="text-[10px] text-slate-500 pt-1">
                 Issued by <strong>{viewingCert.createdBy}</strong> at {new Date(viewingCert.createdAt).toLocaleString()}
+              </div>
+            </div>
+
+            {/* Saved API Response Snapshot Viewer */}
+            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-2 text-xs font-mono">
+              <div className="flex justify-between items-center border-b border-slate-800 pb-1.5">
+                <span className="text-emerald-400 font-bold text-[10px]">SAVED API RESPONSE SNAPSHOT</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const dataToCopy = viewingCert.apiResponseSnapshot || {
+                      findings: viewingCert.snapshotFindings,
+                      payload: viewingCert.snapshotPayload
+                    };
+                    navigator.clipboard.writeText(JSON.stringify(dataToCopy, null, 2));
+                    alert('API response snapshot copied to clipboard!');
+                  }}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] cursor-pointer"
+                >
+                  Copy API JSON
+                </button>
+              </div>
+              <div className="max-h-36 overflow-y-auto bg-slate-900 rounded p-2 text-[10px] text-slate-300">
+                <pre className="whitespace-pre-wrap">
+                  {JSON.stringify(viewingCert.apiResponseSnapshot || {
+                    query: viewingCert.snapshotPayload,
+                    findingsCount: viewingCert.snapshotFindings?.length || 0,
+                    findings: viewingCert.snapshotFindings || []
+                  }, null, 2)}
+                </pre>
               </div>
             </div>
 

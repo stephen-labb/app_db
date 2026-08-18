@@ -514,7 +514,7 @@ app.get('/api/appsettings', (req, res) => {
 
 // 1. Fetch Products (Project Names) from https://app.armorcode.com/user/product/elastic/paged
 app.all(['/api/armorcode/products', '/api/armorcode/products/', '/api/armorcode/product', '/api/armorcode/product/'], async (req, res) => {
-  const apiKey = req.body?.apiKey || req.query?.apiKey || appSettings.ArmorCode?.ApiKey || '';
+  const apiKey = req.body?.apiKey || req.query?.apiKey || process.env.ARMORCODE_API_KEY || process.env.ARMORCODE_KEY || appSettings.ArmorCode?.ApiKey || '';
   const customEndpoint = req.body?.customEndpoint || req.query?.customEndpoint || appSettings.ArmorCode?.ProductApiEndpoint || 'https://app.armorcode.com/user/product/elastic/paged';
 
   const searchQuery = req.body?.search !== undefined 
@@ -578,9 +578,9 @@ app.all(['/api/armorcode/products', '/api/armorcode/products/', '/api/armorcode/
       }
 
       const formatted = productsList.map((p: any, idx: number) => ({
-        id: p.id || p.productId || `ac-p-${idx + 1}`,
+        id: p.id !== undefined ? String(p.id) : (p.productId !== undefined ? String(p.productId) : `ac-p-${idx + 1}`),
         name: typeof p === 'string' ? p : (p.name || p.productName || p.displayName || p.key || `Product-${idx + 1}`),
-        description: typeof p === 'object' ? (p.description || p.details || '') : '',
+        description: typeof p === 'object' ? (p.description || p.details || (p.id ? `Product ID: ${p.id}` : '')) : '',
         category: typeof p === 'object' ? (p.category || 'ArmorCode Product') : 'ArmorCode Product'
       }));
 
@@ -613,18 +613,42 @@ app.all(['/api/armorcode/products', '/api/armorcode/products/', '/api/armorcode/
   });
 });
 
-// 2. Fetch Subproducts (Repositories) from https://app.armorcode.com/api/subproduct
-app.all(['/api/armorcode/subproducts', '/api/armorcode/subproducts/'], async (req, res) => {
+// 2. Fetch Subproducts (Repositories) from https://app.armorcode.com/api/dashboard/sub-product/name-id
+app.all(['/api/armorcode/subproducts', '/api/armorcode/subproducts/', '/api/armorcode/subproduct', '/api/armorcode/sub-product'], async (req, res) => {
   const project = (req.body?.project || req.query?.project || 'sample').toString().trim();
-  const apiKey = req.body?.apiKey || req.query?.apiKey || appSettings.ArmorCode?.ApiKey || '';
-  const customEndpoint = req.body?.customEndpoint || req.query?.customEndpoint || appSettings.ArmorCode?.SubproductApiEndpoint || 'https://app.armorcode.com/api/subproduct';
+  const rawProductId = req.body?.productId || req.query?.productId || req.body?.productIds || req.body?.product;
+  const apiKey = req.body?.apiKey || req.query?.apiKey || process.env.ARMORCODE_API_KEY || process.env.ARMORCODE_KEY || appSettings.ArmorCode?.ApiKey || '';
+  const customEndpoint = req.body?.customEndpoint || req.query?.customEndpoint || appSettings.ArmorCode?.SubproductApiEndpoint || 'https://app.armorcode.com/api/dashboard/sub-product/name-id';
+  const searchQuery = req.body?.search !== undefined 
+    ? String(req.body.search).trim().toLowerCase() 
+    : (req.query?.search !== undefined ? String(req.query.search).trim().toLowerCase() : "");
+
+  // Format productId into array of string IDs e.g. ["385162"]
+  let productIds: string[] = [];
+  if (Array.isArray(rawProductId)) {
+    productIds = rawProductId.map(id => String(id).trim()).filter(Boolean);
+  } else if (rawProductId !== undefined && rawProductId !== null && String(rawProductId).trim() !== '') {
+    productIds = [String(rawProductId).trim()];
+  }
+
+  // If no product ID was provided, attempt to fallback to project or default
+  if (productIds.length === 0 && project) {
+    // If project is a number string, use it
+    if (/^\d+$/.test(project)) {
+      productIds = [project];
+    }
+  }
+
+  const requestPayload = {
+    productId: productIds
+  };
 
   const defaultSubproducts = [
-    { id: 'sub-1', name: `${project}_repo`, description: `Primary source code repository for ${project}`, category: 'Main Repository' },
-    { id: 'sub-2', name: `${project}-core-api`, description: `Backend microservice API layer for ${project}`, category: 'Backend' },
-    { id: 'sub-3', name: `${project}-web-ui`, description: `Frontend SPA web interface for ${project}`, category: 'Frontend' },
-    { id: 'sub-4', name: `${project}-worker-service`, description: `Async background task processor for ${project}`, category: 'Worker' },
-    { id: 'sub-5', name: `${project}-database-migrations`, description: `SQL DDL & Database Migration scripts for ${project}`, category: 'Database' }
+    { id: '1713832', name: `${project}_repo`, description: `Primary source code repository for ${project}`, category: 'Main Repository' },
+    { id: '1713833', name: `${project}-core-api`, description: `Backend microservice API layer for ${project}`, category: 'Backend' },
+    { id: '1713834', name: `${project}-web-ui`, description: `Frontend SPA web interface for ${project}`, category: 'Frontend' },
+    { id: '1713835', name: `${project}-worker-service`, description: `Async background task processor for ${project}`, category: 'Worker' },
+    { id: '1713836', name: `${project}-database-migrations`, description: `SQL DDL & Database Migration scripts for ${project}`, category: 'Database' }
   ];
 
   try {
@@ -641,14 +665,10 @@ app.all(['/api/armorcode/subproducts', '/api/armorcode/subproducts/'], async (re
       headers['X-ArmorCode-API-Key'] = apiKey;
     }
 
-    const urlWithParams = customEndpoint.includes('?')
-      ? `${customEndpoint}&project=${encodeURIComponent(project)}`
-      : `${customEndpoint}?project=${encodeURIComponent(project)}`;
-
-    const apiRes = await fetch(urlWithParams, {
-      method: req.method === 'GET' ? 'GET' : 'POST',
+    const apiRes = await fetch(customEndpoint, {
+      method: 'POST',
       headers,
-      body: req.method === 'POST' ? JSON.stringify({ project, product: project }) : undefined,
+      body: JSON.stringify(requestPayload),
       signal: controller.signal
     });
 
@@ -660,27 +680,36 @@ app.all(['/api/armorcode/subproducts', '/api/armorcode/subproducts/'], async (re
 
       if (Array.isArray(liveData)) {
         subproductsList = liveData;
-      } else if (Array.isArray(liveData.subproducts)) {
-        subproductsList = liveData.subproducts;
       } else if (Array.isArray(liveData.data)) {
         subproductsList = liveData.data;
       } else if (Array.isArray(liveData.content)) {
         subproductsList = liveData.content;
+      } else if (Array.isArray(liveData.subproducts)) {
+        subproductsList = liveData.subproducts;
       }
 
       if (subproductsList.length > 0) {
-        const formatted = subproductsList.map((sp: any, idx: number) => ({
-          id: sp.id || sp.subproductId || `ac-sp-${idx + 1}`,
-          name: typeof sp === 'string' ? sp : (sp.name || sp.subproductName || sp.repository || `Subproduct-${idx + 1}`),
-          description: typeof sp === 'object' ? (sp.description || sp.repositoryUrl || '') : '',
-          category: typeof sp === 'object' ? (sp.category || 'ArmorCode Subproduct') : 'ArmorCode Subproduct'
+        let formatted = subproductsList.map((sp: any, idx: number) => ({
+          id: sp.id !== undefined ? String(sp.id) : (sp.subproductId || `ac-sp-${idx + 1}`),
+          name: typeof sp === 'string' ? sp : (sp.name || sp.subproductName || sp.repository || `Repository-${idx + 1}`),
+          description: typeof sp === 'object' ? (sp.description || (sp.id ? `Repository ID: ${sp.id}` : '')) : '',
+          category: typeof sp === 'object' ? (sp.category || 'Repository') : 'Repository'
         }));
+
+        if (searchQuery) {
+          formatted = formatted.filter(sp => 
+            sp.name.toLowerCase().includes(searchQuery) ||
+            sp.id.toLowerCase().includes(searchQuery) ||
+            sp.description.toLowerCase().includes(searchQuery)
+          );
+        }
 
         return res.json({
           success: true,
           subproducts: formatted,
           source: 'LIVE_API',
-          endpointUsed: customEndpoint
+          endpointUsed: customEndpoint,
+          payloadSent: requestPayload
         });
       }
     }
@@ -688,12 +717,21 @@ app.all(['/api/armorcode/subproducts', '/api/armorcode/subproducts/'], async (re
     console.warn('[ArmorCode API Proxy] Subproducts endpoint live fetch notice:', err.message);
   }
 
-  // Fallback list when live endpoint is unavailable or returns empty
+  // Filter default catalog if live API is unavailable
+  let filteredCatalog = defaultSubproducts;
+  if (searchQuery) {
+    filteredCatalog = defaultSubproducts.filter(sp => 
+      sp.name.toLowerCase().includes(searchQuery) ||
+      sp.description.toLowerCase().includes(searchQuery)
+    );
+  }
+
   return res.json({
     success: true,
-    subproducts: defaultSubproducts,
+    subproducts: filteredCatalog.length > 0 ? filteredCatalog : defaultSubproducts,
     source: 'FALLBACK_CATALOG',
-    endpointUsed: customEndpoint
+    endpointUsed: customEndpoint,
+    payloadSent: requestPayload
   });
 });
 
@@ -703,32 +741,90 @@ app.all(['/api/armorcode/subproducts', '/api/armorcode/subproducts/'], async (re
 app.post('/api/armorcode/findings', async (req, res) => {
   const {
     project = appSettings.ArmorCode?.DefaultProject || 'sample',
+    productId = '',
     repository = '',
-    cycode_branch = appSettings.ArmorCode?.DefaultBranch || 'master',
+    repositories = [],
+    subProductIds = [],
+    cycode_branch = appSettings.ArmorCode?.DefaultBranch || 'main',
     finding_types = [],
-    apiKey = appSettings.ArmorCode?.ApiKey || '',
+    scanTypes,
+    size = 100,
+    page = 0,
+    timezone = appSettings.ArmorCode?.DefaultTimezone || 'Asia/Shanghai',
+    apiKey = req.body?.apiKey || process.env.ARMORCODE_API_KEY || process.env.ARMORCODE_KEY || appSettings.ArmorCode?.ApiKey || '',
     customEndpoint = ''
   } = req.body || {};
 
-  const targetEndpoint = customEndpoint || appSettings.ArmorCode?.ApiEndpoint || 'https://app.armorcode.com/api/findings';
-  const reqSchema = appSettings.ArmorCode?.RequestSchemaMapping || {
-    projectField: 'project',
-    repositoryField: 'repository',
-    branchField: 'cycode_branch'
+  const targetEndpoint = customEndpoint || appSettings.ArmorCode?.ApiEndpoint || 'https://app.armorcode.com/user/findings/';
+
+  // Extract numeric or string Product IDs
+  let productFilter: (number | string)[] = [];
+  if (productId !== undefined && productId !== '') {
+    const num = Number(productId);
+    productFilter = [!isNaN(num) && String(num) === String(productId).trim() ? num : productId];
+  } else if (project) {
+    const num = Number(project);
+    productFilter = [!isNaN(num) ? num : project];
+  }
+
+  // Extract numeric or string SubProduct IDs
+  let subProductFilter: (number | string)[] = [];
+  if (Array.isArray(subProductIds) && subProductIds.length > 0) {
+    subProductFilter = subProductIds.map(id => {
+      const num = Number(id);
+      return !isNaN(num) && String(num) === String(id).trim() ? num : id;
+    });
+  } else if (Array.isArray(repositories) && repositories.length > 0) {
+    subProductFilter = repositories.map(r => {
+      const num = Number(r);
+      return !isNaN(num) ? num : r;
+    });
+  } else if (repository && repository.trim() !== '') {
+    const num = Number(repository);
+    subProductFilter = [!isNaN(num) ? num : repository.trim()];
+  }
+
+  const defaultScanTypes = appSettings.ArmorCode?.DefaultScanTypes || [
+    "SAST",
+    "SCA",
+    "Secrets"
+  ];
+
+  const rawBranch = (cycode_branch && cycode_branch.trim() !== '') ? cycode_branch.replace(/^"|"$/g, '').trim() : 'main';
+  const formattedBranchValue = `\"${rawBranch}\"`;
+  const branchKey = appSettings.ArmorCode?.DefaultBranchKey || '\"custom_cycode_branch\"';
+
+  // Construct standard ArmorCode user/findings payload
+  const filters: Record<string, any> = {
+    product: productFilter,
+    ...(subProductFilter.length > 0 ? { subProduct: subProductFilter } : {}),
+    keyValue: [
+      {
+        key: branchKey,
+        value: formattedBranchValue
+      }
+    ],
+    scanType: Array.isArray(scanTypes) && scanTypes.length > 0 ? scanTypes : defaultScanTypes
   };
 
-  // Construct outgoing payload based on dynamic schema mappings
   const outgoingPayload: Record<string, any> = {
-    [reqSchema.projectField || 'project']: project
+    size: Number(size) || 100,
+    sortColumns: [
+      {
+        property: "riskScore",
+        direction: "desc"
+      }
+    ],
+    filters,
+    filterOperations: {},
+    page: Number(page) || 0,
+    ticketStatusRequired: true,
+    commentCountRequired: true,
+    addLastResolutionNote: false,
+    ignoreMitigated: null,
+    ignoreDuplicate: true,
+    timezone: timezone || "Asia/Shanghai"
   };
-
-  if (repository && repository.trim() !== '') {
-    outgoingPayload[reqSchema.repositoryField || 'repository'] = repository.trim();
-  }
-
-  if (cycode_branch && cycode_branch.trim() !== '') {
-    outgoingPayload[reqSchema.branchField || 'branch'] = cycode_branch.trim();
-  }
 
   let liveSuccess = false;
   let liveStatus = 0;
@@ -738,7 +834,7 @@ app.post('/api/armorcode/findings', async (req, res) => {
   // Attempt live request to ArmorCode API endpoint
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), appSettings.ArmorCode?.TimeoutMs || 8000);
+    const timeout = setTimeout(() => controller.abort(), appSettings.ArmorCode?.TimeoutMs || 10000);
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -770,105 +866,271 @@ app.post('/api/armorcode/findings', async (req, res) => {
     errorMessage = err.name === 'AbortError' ? 'ArmorCode API request timed out' : (err.message || 'Failed to reach ArmorCode endpoint');
   }
 
-  // If live request produced valid findings array, return live data
-  if (liveSuccess && liveData && (Array.isArray(liveData.results) || Array.isArray(liveData))) {
-    const results = Array.isArray(liveData.results) ? liveData.results : liveData;
-    return res.json({
-      success: true,
-      source: 'LIVE_API',
-      endpointUsed: targetEndpoint,
-      httpStatus: liveStatus,
-      payloadSent: outgoingPayload,
-      results,
-      rawResponse: liveData,
-      timestamp: new Date().toISOString()
+  // Helper normalizer for ArmorCode findings
+  const normalizeFindings = (rawList: any[]) => {
+    return rawList.map((f: any, idx: number) => {
+      // 1. Scan Type (can be string, array e.g. ["SAST"], or in additionalDetails)
+      let scanType = 'SAST';
+      if (Array.isArray(f.scanType) && f.scanType.length > 0) {
+        scanType = f.scanType[0];
+      } else if (typeof f.scanType === 'string' && f.scanType.trim() !== '') {
+        scanType = f.scanType;
+      } else if (f.additionalDetails?.scanType) {
+        scanType = f.additionalDetails.scanType;
+      } else if (f.type) {
+        scanType = f.type;
+      }
+
+      // 2. Severity & Risk Score
+      const severity = (f.severity || f.toolSeverity || f.severityLevel || 'MEDIUM').toUpperCase();
+      const riskScore = typeof f.riskScore === 'number' 
+        ? f.riskScore 
+        : (typeof f.findingScore === 'number' 
+            ? f.findingScore 
+            : (typeof f.score === 'number' 
+                ? f.score 
+                : (severity === 'CRITICAL' ? 9.2 : (severity === 'HIGH' ? 7.8 : 5.4))));
+
+      // 3. Status & Mitigation
+      const status = f.status || f.toolFindingStatus || (f.mitigated ? 'MITIGATED' : 'OPEN') || f.ticketStatus || 'OPEN';
+
+      // 4. Product / Project Name
+      const productObj = typeof f.product === 'object' && f.product !== null ? f.product : null;
+      const productName = productObj?.name || (typeof f.product === 'string' ? f.product : '') || f.productName || f.project || (productFilter[0] ? String(productFilter[0]) : String(project));
+      const productId = productObj?.id || (typeof f.product === 'number' ? f.product : (productFilter[0] ? productFilter[0] : undefined));
+
+      // 5. SubProduct / Repository Name
+      const subProductObj = typeof f.subProduct === 'object' && f.subProduct !== null ? f.subProduct : null;
+      const subProductName = subProductObj?.name || (typeof f.subProduct === 'string' ? f.subProduct : '');
+      const repositoryName = f.additionalDetails?.repositoryName || subProductName || f.repository || f.repoName || (subProductFilter[0] ? String(subProductFilter[0]) : 'core-repo');
+      const subProductId = subProductObj?.id || (typeof f.subProduct === 'number' ? f.subProduct : (subProductFilter[0] ? subProductFilter[0] : undefined));
+
+      // 6. Branch
+      const branchVal = f.additionalDetails?.gitBranch 
+        || f.cycode_branch 
+        || (Array.isArray(f.tags) ? f.tags.find((t: string) => t.startsWith('custom_cycode_branch:'))?.split(':')[1] : undefined)
+        || (Array.isArray(f.tags) ? f.tags.find((t: string) => t.startsWith('cycode.branch:'))?.split(':')[1] : undefined)
+        || f.branch 
+        || rawBranch;
+
+      // 7. Tool / Source
+      const toolName = f.source || f.tool || f.toolName || f.sourceTool || (scanType ? `${scanType} Scanner` : 'Cycode');
+
+      // 8. CVE / CWE / OWASP Reference
+      let cveOrCwe = '';
+      if (Array.isArray(f.cwesStrings) && f.cwesStrings.length > 0) {
+        cveOrCwe = f.cwesStrings[0];
+      } else if (Array.isArray(f.cwe) && f.cwe.length > 0) {
+        cveOrCwe = `CWE-${f.cwe[0]}`;
+      } else if (Array.isArray(f.cve) && f.cve.length > 0) {
+        cveOrCwe = f.cve[0];
+      } else if (f.cve || f.cveId || f.cve_id || f.cwe || f.cweId) {
+        cveOrCwe = f.cve || f.cveId || f.cve_id || f.cwe || f.cweId;
+      } else if (f.taxonomy?.owaspTop10_2021 && Array.isArray(f.taxonomy.owaspTop10_2021) && f.taxonomy.owaspTop10_2021.length > 0) {
+        cveOrCwe = f.taxonomy.owaspTop10_2021[0].split(' - ')[0] || f.taxonomy.owaspTop10_2021[0];
+      } else {
+        cveOrCwe = severity === 'CRITICAL' ? 'CWE-347' : 'CWE-89';
+      }
+
+      // 9. File Path & Line Number
+      let rawFilePath = f.filePath || f.file_path || f.fileName || f.location || f.additionalDetails?.permalink || 'src/main.ts';
+      let displayFilePath = rawFilePath;
+      if (typeof rawFilePath === 'string' && rawFilePath.includes('?path=')) {
+        const match = rawFilePath.match(/\?path=([^&]+)/);
+        if (match && match[1]) {
+          displayFilePath = decodeURIComponent(match[1]);
+        }
+      }
+      const lineNum = f.lineNumber || f.line_number || f.line || 1;
+
+      // 10. Title & Description
+      const title = f.title || f.name || f.findingDescription || (f.description ? f.description.split('\n')[0].replace(/^\*\*Policy name:\*\*\s*/, '') : 'Vulnerability detected');
+      const rawDescription = f.description || title;
+
+      // 11. Remediation guidance
+      let remediationText = f.remediation || f.mitigation || f.recommendation || f.solution || f.resolutionNote || '';
+      if (!remediationText && typeof f.description === 'string' && f.description.includes('**Correlation Message:**')) {
+        const corrMatch = f.description.match(/\*\*Correlation Message:\*\*\s*([\s\S]+)$/);
+        if (corrMatch && corrMatch[1]) {
+          remediationText = corrMatch[1].trim();
+        }
+      }
+      if (!remediationText) {
+        remediationText = `Verify and remediate ${title} per AppSec security baseline standard.`;
+      }
+
+      return {
+        finding_id: String(f.id || f.findingId || f.finding_id || `AC-${idx + 1}`),
+        type: scanType.toLowerCase().replace(/[^a-z0-9]/g, ''),
+        scanType: scanType,
+        severity: severity,
+        riskScore: riskScore,
+        title: title,
+        description: rawDescription,
+        remediation: remediationText,
+        cycode_branch: branchVal,
+        repository: repositoryName,
+        subProduct: subProductName || subProductId || repositoryName,
+        subProductId: subProductId,
+        project: productName,
+        product: productName || productId,
+        productId: productId,
+        tool: toolName,
+        cve_id: cveOrCwe,
+        file_path: displayFilePath,
+        raw_file_path: rawFilePath,
+        line_number: lineNum,
+        ticketStatus: status,
+        status: status,
+        findingUrl: f.findingUrl || (f.id ? `https://app.armorcode.com#/findings/${f.id}` : undefined),
+        url: f.url || f.additionalDetails?.permalink,
+        raw: f
+      };
     });
+  };
+
+  // If live request produced valid findings array
+  if (liveSuccess && liveData) {
+    let rawList: any[] = [];
+    if (Array.isArray(liveData.content)) {
+      rawList = liveData.content;
+    } else if (Array.isArray(liveData.results)) {
+      rawList = liveData.results;
+    } else if (Array.isArray(liveData.findings)) {
+      rawList = liveData.findings;
+    } else if (Array.isArray(liveData.data)) {
+      rawList = liveData.data;
+    } else if (Array.isArray(liveData)) {
+      rawList = liveData;
+    }
+
+    if (rawList.length > 0 || liveData.content || liveData.totalElements !== undefined) {
+      const results = normalizeFindings(rawList);
+      return res.json({
+        success: true,
+        source: 'LIVE_API',
+        endpointUsed: targetEndpoint,
+        httpStatus: liveStatus,
+        payloadSent: outgoingPayload,
+        results,
+        totalElements: liveData.totalElements !== undefined ? liveData.totalElements : results.length,
+        totalPages: liveData.totalPages !== undefined ? liveData.totalPages : 1,
+        rawResponse: liveData,
+        timestamp: new Date().toISOString()
+      });
+    }
   }
 
   // Fallback: Generate high-fidelity simulated ArmorCode security report findings
-  const targetRepos = repository && repository.trim() !== ''
-    ? [repository.trim()]
-    : [`${project.toLowerCase()}-core-api`, `${project.toLowerCase()}-frontend-web`, `${project.toLowerCase()}-auth-service`];
+  let targetRepos: string[] = [];
+  if (Array.isArray(repositories) && repositories.length > 0) {
+    targetRepos = repositories.map(r => String(r).trim()).filter(Boolean);
+  } else if (repository && repository.trim() !== '') {
+    targetRepos = [repository.trim()];
+  } else {
+    targetRepos = [`${project.toLowerCase()}-core-api`, `${project.toLowerCase()}-frontend-web`, `${project.toLowerCase()}-auth-service`];
+  }
 
-  const branch = cycode_branch || 'master';
+  const branch = rawBranch;
 
   const simulatedCatalog = [
     {
       finding_id: 'AC-SAST-9041',
       type: 'sast',
+      scanType: 'SAST',
       severity: 'HIGH',
+      riskScore: 8.4,
       description: 'Missing Anti-Forgery CSRF Validation Token in sensitive POST state-changing controller',
       remediation: 'Apply @ValidateAntiForgeryToken attribute or AntiForgery.validate() middleware in HTTP POST endpoints.',
       tool: 'Cycode SAST / Semgrep',
       cve_id: 'CWE-352',
       file_path: 'src/controllers/PaymentController.ts',
-      line_number: 42
+      line_number: 42,
+      ticketStatus: 'OPEN'
     },
     {
       finding_id: 'AC-SAST-9088',
       type: 'sast',
+      scanType: 'SAST',
       severity: 'CRITICAL',
+      riskScore: 9.8,
       description: 'Potential SQL Injection via unescaped string concatenation in database query generator',
       remediation: 'Refactor raw string query concatenation to parameterized SQL bindings or ORM query builder.',
       tool: 'Cycode SAST / SonarQube',
       cve_id: 'CWE-89',
       file_path: 'src/db/repository.ts',
-      line_number: 118
+      line_number: 118,
+      ticketStatus: 'OPEN'
     },
     {
       finding_id: 'AC-SCA-3012',
       type: 'sca',
+      scanType: 'SCA',
       severity: 'HIGH',
+      riskScore: 7.9,
       description: 'Transitive dependency jackson-databind vulnerable to Remote Code Execution (RCE)',
       remediation: 'Upgrade jackson-databind to version >= 2.15.2 or update parent Spring Boot BOM.',
       tool: 'Snyk SCA / Dependency-Check',
       cve_id: 'CVE-2023-35116',
       file_path: 'package-lock.json',
-      line_number: 840
+      line_number: 840,
+      ticketStatus: 'OPEN'
     },
     {
       finding_id: 'AC-SECRET-1004',
       type: 'secret',
+      scanType: 'Secrets',
       severity: 'CRITICAL',
+      riskScore: 9.5,
       description: 'Hardcoded High-Entropy AWS Identity & Access Management Secret Key detected in source code',
       remediation: 'Revoke AWS secret key in IAM console immediately, purge from git history, and store in Secret Manager.',
       tool: 'Gitleaks / Cycode Secrets',
       cve_id: 'CWE-798',
       file_path: 'config/aws_credentials.json',
-      line_number: 14
+      line_number: 14,
+      ticketStatus: 'IN_REVIEW'
     },
     {
       finding_id: 'AC-DAST-7022',
       type: 'dast',
+      scanType: 'DAST',
       severity: 'MEDIUM',
+      riskScore: 5.8,
       description: 'Reflected Cross-Site Scripting (XSS) vulnerability detected in query parameter search string',
       remediation: 'Encode HTML output responses using OWASP Java/Node Sanitizer and enforce Content Security Policy (CSP).',
       tool: 'OWASP ZAP DAST',
       cve_id: 'CWE-79',
       file_path: '/api/v1/search?q=<script>',
-      line_number: 1
+      line_number: 1,
+      ticketStatus: 'OPEN'
     },
     {
       finding_id: 'AC-IAC-5019',
       type: 'iac',
+      scanType: 'Infrastructure Tools',
       severity: 'HIGH',
+      riskScore: 7.2,
       description: 'Terraform S3 Bucket resource defined with public read access enabled without block public access rules',
       remediation: 'Set block_public_acls = true and block_public_policy = true on aws_s3_bucket_public_access_block.',
       tool: 'Checkov / Tfsec',
       cve_id: 'CWE-732',
       file_path: 'terraform/s3_storage.tf',
-      line_number: 29
+      line_number: 29,
+      ticketStatus: 'OPEN'
     },
     {
       finding_id: 'AC-CONTAINER-2041',
       type: 'container',
+      scanType: 'Container Security',
       severity: 'MEDIUM',
+      riskScore: 6.1,
       description: 'Docker image base layer node:18-alpine contains unpatched libcrypto OpenSSL vulnerability',
       remediation: 'Update Dockerfile base image to node:20-alpine or alpine:3.19 with latest OpenSSL security patch.',
       tool: 'Trivy Container Scanner',
       cve_id: 'CVE-2023-5363',
       file_path: 'Dockerfile',
-      line_number: 1
+      line_number: 1,
+      ticketStatus: 'RESOLVED'
     }
   ];
 
@@ -878,21 +1140,27 @@ app.post('/api/armorcode/findings', async (req, res) => {
 
   for (const repo of targetRepos) {
     for (const template of simulatedCatalog) {
-      if (finding_types.length === 0 || finding_types.includes(template.type)) {
+      if (finding_types.length === 0 || finding_types.includes(template.type) || finding_types.includes(template.scanType)) {
         count++;
         results.push({
           finding_id: `${template.finding_id}-${count}`,
           type: template.type,
+          scanType: template.scanType,
           severity: template.severity,
+          riskScore: template.riskScore,
           description: `${template.description} [${project}/${repo}]`,
           remediation: template.remediation,
           cycode_branch: branch,
           repository: repo,
+          subProduct: repo,
           project: project,
+          product: productId || project,
           tool: template.tool,
           cve_id: template.cve_id,
           file_path: template.file_path,
-          line_number: template.line_number
+          line_number: template.line_number,
+          ticketStatus: template.ticketStatus,
+          status: template.ticketStatus
         });
       }
     }
@@ -900,14 +1168,20 @@ app.post('/api/armorcode/findings', async (req, res) => {
 
   res.json({
     success: true,
-    source: errorMessage ? 'SIMULATED_DATA' : 'SIMULATED_DATA',
+    source: 'SIMULATED_DATA',
     endpointUsed: targetEndpoint,
     httpStatus: 200,
     payloadSent: outgoingPayload,
     results,
+    totalElements: results.length,
+    totalPages: 1,
     errorMessage: errorMessage || undefined,
     rawResponse: {
-      results,
+      content: results,
+      totalElements: results.length,
+      totalPages: 1,
+      size: outgoingPayload.size,
+      number: outgoingPayload.page,
       meta: {
         total_count: results.length,
         project_queried: project,
@@ -1469,8 +1743,6 @@ app.get('/api/apps', async (req, res) => {
       ownerIT: r.owner_it,
       hostingEnv: r.hosting_env,
       dataClassification: r.data_classification,
-      rto: r.rto,
-      rpo: r.rpo,
       internetExposed: r.internet_exposed,
       isGamingNetwork: r.is_gaming_network,
       thirdPartyIntegrations: r.third_party_integrations || [],
@@ -1499,10 +1771,10 @@ app.post('/api/apps', async (req, res) => {
     `INSERT INTO applications (
       id, code, name, description, tier, rating, calculated_score,
       department, owner_app_sec, owner_it, hosting_env, data_classification,
-      rto, rpo, internet_exposed, is_gaming_network, third_party_integrations,
+      internet_exposed, is_gaming_network, third_party_integrations,
       compliance_requirements, status, factors, last_assessed, assessed_by,
       created_at, updated_at, notes
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
     ON CONFLICT (id) DO UPDATE SET
       code = EXCLUDED.code,
       name = EXCLUDED.name,
@@ -1515,8 +1787,6 @@ app.post('/api/apps', async (req, res) => {
       owner_it = EXCLUDED.owner_it,
       hosting_env = EXCLUDED.hosting_env,
       data_classification = EXCLUDED.data_classification,
-      rto = EXCLUDED.rto,
-      rpo = EXCLUDED.rpo,
       internet_exposed = EXCLUDED.internet_exposed,
       is_gaming_network = EXCLUDED.is_gaming_network,
       third_party_integrations = EXCLUDED.third_party_integrations,
@@ -1540,8 +1810,6 @@ app.post('/api/apps', async (req, res) => {
       appData.ownerIT || '',
       appData.hostingEnv || '',
       appData.dataClassification || 'INTERNAL',
-      appData.rto || '1 Hour',
-      appData.rpo || '15 Minutes',
       Boolean(appData.internetExposed),
       Boolean(appData.isGamingNetwork),
       JSON.stringify(appData.thirdPartyIntegrations || []),
@@ -1680,8 +1948,6 @@ app.get('/api/pending-assessments', async (req, res) => {
       updatedAt: r.updated_at,
       dataClassification: r.data_classification,
       hostingEnv: r.hosting_env,
-      rto: r.rto,
-      rpo: r.rpo,
       internetExposed: r.internet_exposed,
       factors: r.factors || {},
       calculatedScore: parseFloat(r.calculated_score),
@@ -1709,10 +1975,10 @@ app.post('/api/pending-assessments', async (req, res) => {
       id, app_id, app_code, app_name, description, department,
       owner_it, owner_app_sec, submitter_name, submitter_email,
       submitted_at, updated_at, data_classification, hosting_env,
-      rto, rpo, internet_exposed, factors, calculated_score,
+      internet_exposed, factors, calculated_score,
       proposed_tier, status, notes, comments, admin_decision_by,
       admin_decision_at, admin_decision_notes
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
     ON CONFLICT (id) DO UPDATE SET
       app_id = EXCLUDED.app_id,
       app_code = EXCLUDED.app_code,
@@ -1726,8 +1992,6 @@ app.post('/api/pending-assessments', async (req, res) => {
       updated_at = NOW(),
       data_classification = EXCLUDED.data_classification,
       hosting_env = EXCLUDED.hosting_env,
-      rto = EXCLUDED.rto,
-      rpo = EXCLUDED.rpo,
       internet_exposed = EXCLUDED.internet_exposed,
       factors = EXCLUDED.factors,
       calculated_score = EXCLUDED.calculated_score,
@@ -1753,8 +2017,6 @@ app.post('/api/pending-assessments', async (req, res) => {
       p.updatedAt || new Date().toISOString(),
       p.dataClassification || 'CONFIDENTIAL',
       p.hostingEnv || '',
-      p.rto || '1 Hour',
-      p.rpo || '15 Minutes',
       Boolean(p.internetExposed),
       JSON.stringify(p.factors || {}),
       p.calculatedScore || 0,

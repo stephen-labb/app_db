@@ -18,8 +18,6 @@ CREATE TABLE IF NOT EXISTS applications (
   owner_it VARCHAR(255),
   hosting_env VARCHAR(255),
   data_classification VARCHAR(100),
-  rto VARCHAR(100),
-  rpo VARCHAR(100),
   internet_exposed BOOLEAN DEFAULT FALSE,
   is_gaming_network BOOLEAN DEFAULT FALSE,
   third_party_integrations JSONB DEFAULT '[]'::jsonb,
@@ -69,8 +67,6 @@ CREATE TABLE IF NOT EXISTS pending_assessments (
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   data_classification VARCHAR(100),
   hosting_env VARCHAR(255),
-  rto VARCHAR(100),
-  rpo VARCHAR(100),
   internet_exposed BOOLEAN DEFAULT FALSE,
   factors JSONB DEFAULT '{}'::jsonb,
   calculated_score NUMERIC(5,2),
@@ -110,7 +106,21 @@ CREATE TABLE IF NOT EXISTS scim_audit_logs (
   target_user_id VARCHAR(100)
 );
 
+-- 7. Create Promotion Evidences Table (Auditable Release Passports & Security Gates)
+CREATE TABLE IF NOT EXISTS promotion_evidences (
+  evidence_id VARCHAR(100) PRIMARY KEY,
+  project VARCHAR(255),
+  repository VARCHAR(255),
+  branch VARCHAR(255),
+  target_environment VARCHAR(100),
+  status VARCHAR(50) DEFAULT 'ISSUED',
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  evidence_data JSONB DEFAULT '{}'::jsonb
+);
+
 -- Create Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_apps_tier ON applications(tier);
 CREATE INDEX IF NOT EXISTS idx_apps_department ON applications(department);
 CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_promo_evidence_created ON promotion_evidences(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_promo_evidence_project ON promotion_evidences(project);

@@ -43,7 +43,7 @@ export const Header: React.FC<HeaderProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h1 className="font-bold text-base sm:text-lg text-slate-100 tracking-tight leading-none">
-                AppSec Criticality Database
+                DevSecOps Management Console
               </h1>
               <span className="hidden sm:inline-block text-xs bg-slate-800 text-indigo-300 px-2 py-0.5 rounded-full font-mono border border-slate-700">
                 v2.4 Azure SSO & SCIM

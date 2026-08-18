@@ -107,7 +107,7 @@ export const StatsSummary: React.FC<StatsSummaryProps> = ({
       <div className="bg-white rounded-xl p-4 border border-emerald-200/80 shadow-xs flex flex-col justify-between hover:border-emerald-300 transition-all bg-gradient-to-br from-white to-emerald-50/20">
         <div className="flex items-center justify-between">
           <span className="text-xs font-semibold text-emerald-800 uppercase tracking-wider">
-            SOP Assessment SLA
+            SOP Assessment Currency
           </span>
           <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center">
             <CheckCircle2 className="w-4 h-4" />

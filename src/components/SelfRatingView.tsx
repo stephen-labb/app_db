@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Application, CriticalityFactors, DataClassification, PendingAssessment, UserRole, ActiveSsoUser, STANDARD_DEPARTMENTS } from '../types';
 import { checkDuplicateAppDetails } from '../utils/validation';
-import { calculateCriticalityScore, scoreToTier, getTierBadgeProps, getRecommendedSLAs } from '../utils/scoring';
+import { calculateCriticalityScore, scoreToTier, getTierBadgeProps } from '../utils/scoring';
 import {
   Sparkles,
   Calculator,
@@ -14,7 +14,6 @@ import {
   User,
   Mail,
   FileText,
-  Clock,
   ArrowRight,
   ShieldCheck,
   UserCheck
@@ -70,8 +69,6 @@ export const SelfRatingView: React.FC<SelfRatingViewProps> = ({
   }, [activeSsoUser]);
   const [dataClassification, setDataClassification] = useState<DataClassification>('RESTRICTED');
   const [hostingEnv, setHostingEnv] = useState('GCP Cloud Run / AWS Multi-AZ');
-  const [rto, setRto] = useState('1 Hour');
-  const [rpo, setRpo] = useState('15 Minutes');
   const [internetExposed, setInternetExposed] = useState(false);
   const [isGamingNetwork, setIsGamingNetwork] = useState(false);
   const [notes, setNotes] = useState('');
@@ -90,7 +87,6 @@ export const SelfRatingView: React.FC<SelfRatingViewProps> = ({
   const liveScore = calculateCriticalityScore(factors);
   const liveTier = scoreToTier(liveScore);
   const tierBadgeProps = getTierBadgeProps(liveTier);
-  const recommendedSLA = getRecommendedSLAs(liveTier);
 
   // When switching to an existing application, populate fields
   const handleSelectExistingApp = (appId: string) => {
@@ -105,8 +101,6 @@ export const SelfRatingView: React.FC<SelfRatingViewProps> = ({
       setOwnerAppSec(app.ownerAppSec);
       setDataClassification(app.dataClassification);
       setHostingEnv(app.hostingEnv);
-      setRto(app.rto);
-      setRpo(app.rpo);
       setInternetExposed(app.internetExposed);
       setIsGamingNetwork(Boolean(app.isGamingNetwork));
       setFactors(app.factors || {
@@ -135,8 +129,6 @@ export const SelfRatingView: React.FC<SelfRatingViewProps> = ({
       if (activeSsoUser?.email || activeSsoUser?.upn) setSubmitterEmail(activeSsoUser.email || activeSsoUser.upn);
       setDataClassification('RESTRICTED');
       setHostingEnv('GCP Cloud Run');
-      setRto('1 Hour');
-      setRpo('15 Minutes');
       setInternetExposed(false);
       setIsGamingNetwork(false);
       setNotes('');
@@ -193,8 +185,6 @@ export const SelfRatingView: React.FC<SelfRatingViewProps> = ({
       submitterEmail: effectiveSubmitterEmail,
       dataClassification,
       hostingEnv,
-      rto,
-      rpo,
       internetExposed,
       isGamingNetwork,
       factors,
@@ -651,45 +641,11 @@ export const SelfRatingView: React.FC<SelfRatingViewProps> = ({
             </div>
           </div>
 
-          {/* Proposed SLAs */}
-          <div className="space-y-3">
-            <h3 className="font-bold text-slate-900 text-xs uppercase tracking-wider text-indigo-700 border-b border-slate-200 pb-1">
-              4. Proposed Operational SLAs (RTO & RPO)
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Target Recovery Time (RTO)</label>
-                <input
-                  type="text"
-                  required
-                  value={rto}
-                  onChange={(e) => setRto(e.target.value)}
-                  placeholder="e.g. 1 Hour"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg font-mono focus:bg-white"
-                />
-                <span className="text-[10px] text-slate-500">Recommended for {liveTier}: {recommendedSLA.rto}</span>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Target Data Loss Limit (RPO)</label>
-                <input
-                  type="text"
-                  required
-                  value={rpo}
-                  onChange={(e) => setRpo(e.target.value)}
-                  placeholder="e.g. 15 Minutes"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg font-mono focus:bg-white"
-                />
-                <span className="text-[10px] text-slate-500">Recommended for {liveTier}: {recommendedSLA.rpo}</span>
-              </div>
-            </div>
-          </div>
-
           {/* Submitter Info & Notes */}
           <div className="space-y-4 pt-2">
             <div className="flex items-center justify-between border-b border-slate-200 pb-1 flex-wrap gap-2">
               <h3 className="font-bold text-slate-900 text-xs uppercase tracking-wider text-indigo-700">
-                5. SSO Submitter Identity & Assessment Justification
+                4. SSO Submitter Identity & Assessment Justification
               </h3>
             </div>
 

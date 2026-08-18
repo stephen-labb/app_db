@@ -27,8 +27,6 @@ export const AssessmentMatrixView: React.FC = () => {
       code: 'C',
       title: 'Rating C - Critical Impact',
       scoreRange: 'Score ≥ 9.0 Points',
-      rto: '< 1 Hour',
-      rpo: '< 15 Minutes',
       availability: '99.99%',
       penTestFreq: 'Annual Pen Test + Continuous Automated DAST/SAST',
       patchSLA: '< 24 Hours for Critical Flaws',
@@ -39,8 +37,6 @@ export const AssessmentMatrixView: React.FC = () => {
       code: 'H',
       title: 'Rating H - High Impact',
       scoreRange: 'Score 6.0 - 8.9 Points',
-      rto: '1 - 4 Hours',
-      rpo: '1 Hour',
       availability: '99.9%',
       penTestFreq: 'Annual Security Audit + Bi-weekly Scans',
       patchSLA: '< 7 Days for Critical Flaws',
@@ -51,8 +47,6 @@ export const AssessmentMatrixView: React.FC = () => {
       code: 'M',
       title: 'Rating M - Medium Impact',
       scoreRange: 'Score 3.0 - 5.9 Points',
-      rto: '4 - 12 Hours',
-      rpo: '4 Hours',
       availability: '99.5%',
       penTestFreq: 'Bi-annual Vulnerability Assessment',
       patchSLA: '< 30 Days for Critical Flaws',
@@ -63,8 +57,6 @@ export const AssessmentMatrixView: React.FC = () => {
       code: 'L',
       title: 'Rating L - Low Impact',
       scoreRange: 'Score < 3.0 Points',
-      rto: '24 - 48 Hours',
-      rpo: '24 Hours',
       availability: 'Best Effort',
       penTestFreq: 'Annual Automated Scan',
       patchSLA: '< 60 Days',
@@ -119,15 +111,9 @@ export const AssessmentMatrixView: React.FC = () => {
               </div>
 
               <div className="space-y-2 pt-2 border-t border-slate-100 text-xs">
-                <div className="grid grid-cols-2 gap-2 bg-slate-50 p-2.5 rounded-lg font-mono">
-                  <div>
-                    <span className="text-slate-400 block text-[10px] uppercase font-sans">RTO Target</span>
-                    <span className="font-bold text-slate-900">{item.rto}</span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block text-[10px] uppercase font-sans">RPO Target</span>
-                    <span className="font-bold text-slate-900">{item.rpo}</span>
-                  </div>
+                <div className="bg-slate-50 p-2.5 rounded-lg font-mono flex items-center justify-between">
+                  <span className="text-slate-400 text-[10px] uppercase font-sans font-semibold">Target Availability</span>
+                  <span className="font-bold text-slate-900">{item.availability}</span>
                 </div>
 
                 <div className="space-y-1 text-[11px]">
@@ -252,16 +238,8 @@ export const AssessmentMatrixView: React.FC = () => {
 
             <div className="p-3 bg-slate-950/80 rounded-lg border border-slate-800 space-y-1 font-mono text-[11px]">
               <div className="flex justify-between text-slate-300">
-                <span>RTO SLA:</span>
-                <span className="font-bold text-emerald-400">{slaProps.rto}</span>
-              </div>
-              <div className="flex justify-between text-slate-300">
-                <span>RPO SLA:</span>
-                <span className="font-bold text-emerald-400">{slaProps.rpo}</span>
-              </div>
-              <div className="flex justify-between text-slate-300">
-                <span>Target Uptime:</span>
-                <span className="font-bold text-indigo-300">{slaProps.availability}</span>
+                <span>Target Availability:</span>
+                <span className="font-bold text-emerald-400">{slaProps.availability}</span>
               </div>
             </div>
 
