@@ -153,7 +153,9 @@ export function addAuditLog(
   action: AuditLogEntry['action'],
   details: string,
   appId?: string,
-  appName?: string
+  appName?: string,
+  component?: string,
+  complianceTag?: string
 ): AuditLogEntry {
   const currentLogs = loadAuditLogs();
   const newEntry: AuditLogEntry = {
@@ -164,7 +166,9 @@ export function addAuditLog(
     action,
     details,
     appId,
-    appName
+    appName,
+    component: component || 'Applications Database',
+    complianceTag: complianceTag || 'SOC2-CC6.1-AUDIT-TRAIL'
   };
   const updated = [newEntry, ...currentLogs];
   saveAuditLogs(updated);
@@ -289,7 +293,7 @@ export function exportTicketsCSV(tickets: PendingAssessment[]): void {
   const headers = [
     'Ticket ID', 'App Code', 'App Name', 'Submitter', 'Department',
     'Submitted At', 'Status', 'Proposed Tier', 'Calculated Score',
-    'Hosting Env', 'Data Classification', 'RTO', 'RPO', 'Internet Exposed',
+    'Hosting Env', 'Data Classification', 'Internet Exposed',
     'Admin Decision By', 'Admin Decision At', 'Decision Notes', 'Comments Count'
   ];
 
@@ -305,8 +309,6 @@ export function exportTicketsCSV(tickets: PendingAssessment[]): void {
     t.calculatedScore.toFixed(1),
     `"${t.hostingEnv}"`,
     t.dataClassification,
-    t.rto,
-    t.rpo,
     t.internetExposed ? 'Yes' : 'No',
     `"${(t.adminDecisionBy || '').replace(/"/g, '""')}"`,
     t.adminDecisionAt || '',
@@ -327,7 +329,7 @@ export function exportTicketsCSV(tickets: PendingAssessment[]): void {
 export function exportApplicationsCSV(apps: Application[]): void {
   const headers = [
     'ID', 'Code', 'Name', 'Tier', 'Score', 'Department',
-    'AppSec Owner', 'IT Owner', 'Data Classification', 'RTO', 'RPO',
+    'AppSec Owner', 'IT Owner', 'Data Classification',
     'Internet Exposed', 'Hosting Env', 'Status', 'Last Assessed'
   ];
 
@@ -341,8 +343,6 @@ export function exportApplicationsCSV(apps: Application[]): void {
     `"${app.ownerAppSec}"`,
     `"${app.ownerIT}"`,
     app.dataClassification,
-    app.rto,
-    app.rpo,
     app.internetExposed ? 'Yes' : 'No',
     `"${app.hostingEnv}"`,
     app.status,

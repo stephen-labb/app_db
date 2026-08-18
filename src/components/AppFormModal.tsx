@@ -4,7 +4,6 @@ import { checkDuplicateAppDetails } from '../utils/validation';
 import {
   calculateCriticalityScore,
   scoreToTier,
-  getRecommendedSLAs,
   getTierBadgeProps
 } from '../utils/scoring';
 import {
@@ -12,7 +11,6 @@ import {
   Shield,
   Calculator,
   Save,
-  Clock,
   Server,
   UserCheck,
   Globe,
@@ -46,8 +44,6 @@ export const AppFormModal: React.FC<AppFormModalProps> = ({
   const [ownerIT, setOwnerIT] = useState('David Chen (SRE Ops)');
   const [hostingEnv, setHostingEnv] = useState('AWS Cloud (us-east-1)');
   const [dataClassification, setDataClassification] = useState<DataClassification>('CONFIDENTIAL');
-  const [rto, setRto] = useState('1 Hour');
-  const [rpo, setRpo] = useState('15 Minutes');
   const [internetExposed, setInternetExposed] = useState(false);
   const [isGamingNetwork, setIsGamingNetwork] = useState(false);
   const [status, setStatus] = useState<AppStatus>('ACTIVE');
@@ -69,7 +65,6 @@ export const AppFormModal: React.FC<AppFormModalProps> = ({
   const liveScore = calculateCriticalityScore(factors);
   const liveTier = scoreToTier(liveScore);
   const tierBadgeProps = getTierBadgeProps(liveTier);
-  const recommendedSLA = getRecommendedSLAs(liveTier);
 
   // Pre-fill if editing
   useEffect(() => {
@@ -83,8 +78,6 @@ export const AppFormModal: React.FC<AppFormModalProps> = ({
       setOwnerIT(editingApp.ownerIT);
       setHostingEnv(editingApp.hostingEnv);
       setDataClassification(editingApp.dataClassification);
-      setRto(editingApp.rto);
-      setRpo(editingApp.rpo);
       setInternetExposed(editingApp.internetExposed);
       setIsGamingNetwork(Boolean(editingApp.isGamingNetwork));
       setStatus(editingApp.status);
@@ -109,8 +102,6 @@ export const AppFormModal: React.FC<AppFormModalProps> = ({
       setOwnerIT('Alex Vance (IT Ops)');
       setHostingEnv('GCP Cloud Run');
       setDataClassification('CONFIDENTIAL');
-      setRto(recommendedSLA.rto);
-      setRpo(recommendedSLA.rpo);
       setInternetExposed(false);
       setIsGamingNetwork(false);
       setStatus('ACTIVE');
@@ -136,12 +127,6 @@ export const AppFormModal: React.FC<AppFormModalProps> = ({
     } else if (!checked && factors.exposureScore > 6) {
       setFactors((prev) => ({ ...prev, exposureScore: 0 }));
     }
-  };
-
-  // Pre-fill suggested SLAs button
-  const applySuggestedSLAs = () => {
-    setRto(recommendedSLA.rto);
-    setRpo(recommendedSLA.rpo);
   };
 
   const handleComplianceToggle = (comp: string) => {
@@ -190,8 +175,6 @@ export const AppFormModal: React.FC<AppFormModalProps> = ({
       ownerIT,
       hostingEnv,
       dataClassification,
-      rto,
-      rpo,
       internetExposed,
       isGamingNetwork,
       thirdPartyIntegrations,
@@ -514,63 +497,10 @@ export const AppFormModal: React.FC<AppFormModalProps> = ({
             </div>
           </div>
 
-          {/* Section 3: IT SLAs & Operating Expectations */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-1">
-              <h3 className="font-semibold text-slate-900 text-xs uppercase tracking-wider text-indigo-600">
-                3. IT Operations SLAs (RTO & RPO Expectations)
-              </h3>
-              <button
-                type="button"
-                onClick={applySuggestedSLAs}
-                className="text-[11px] text-indigo-600 hover:text-indigo-800 font-medium underline flex items-center gap-1"
-              >
-                <Clock className="w-3 h-3" />
-                <span>Auto-fill Recommended SLAs for {liveTier}</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block font-medium text-slate-700 mb-1">
-                  Recovery Time Objective (RTO)
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={rto}
-                  onChange={(e) => setRto(e.target.value)}
-                  placeholder="e.g. 15 Minutes"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono"
-                />
-                <span className="text-[10px] text-slate-400">
-                  Recommended for {liveTier}: {recommendedSLA.rto}
-                </span>
-              </div>
-
-              <div>
-                <label className="block font-medium text-slate-700 mb-1">
-                  Recovery Point Objective (RPO)
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={rpo}
-                  onChange={(e) => setRpo(e.target.value)}
-                  placeholder="e.g. 5 Minutes"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono"
-                />
-                <span className="text-[10px] text-slate-400">
-                  Recommended for {liveTier}: {recommendedSLA.rpo}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Section 4: Governance & Classification Details */}
+          {/* Section 3: Governance & Classification Details */}
           <div className="space-y-3">
             <h3 className="font-semibold text-slate-900 text-xs uppercase tracking-wider text-indigo-600 border-b border-slate-200 pb-1">
-              4. Governance, Ownership & Infrastructure
+              3. Governance, Ownership & Infrastructure
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -693,10 +623,10 @@ export const AppFormModal: React.FC<AppFormModalProps> = ({
             </div>
           </div>
 
-          {/* Section 5: Compliance Frameworks & Integrations */}
+          {/* Section 4: Compliance Frameworks & Integrations */}
           <div className="space-y-3">
             <h3 className="font-semibold text-slate-900 text-xs uppercase tracking-wider text-indigo-600 border-b border-slate-200 pb-1">
-              5. Compliance & Integrations
+              4. Compliance & Integrations
             </h3>
 
             <div>
@@ -739,7 +669,7 @@ export const AppFormModal: React.FC<AppFormModalProps> = ({
             </div>
           </div>
 
-          {/* Section 6: AppSec Directives & Assessment Notes */}
+          {/* Section 5: AppSec Directives & Assessment Notes */}
           <div>
             <label className="block font-medium text-slate-700 mb-1">
               AppSec Assessment Directives & Security Testing Mandates

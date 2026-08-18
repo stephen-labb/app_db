@@ -1,5 +1,5 @@
 {
-  "name": "Application Criticality Manager V2",
+  "name": "Application Database Management Console",
   "description": "Centralized database for AppSec to manage application criticality ratings and for IT teams to view them.",
   "requestFramePermissions": [],
   "majorCapabilities": [

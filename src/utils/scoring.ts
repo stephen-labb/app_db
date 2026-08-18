@@ -38,16 +38,16 @@ export function scoreToRating(score: number): CriticalityRating {
 // Alias for compatibility
 export const scoreToTier = scoreToRating;
 
-export function getRecommendedSLAs(rating: CriticalityRating): { rto: string; rpo: string; availability: string } {
+export function getRecommendedSLAs(rating: CriticalityRating): { availability: string } {
   switch (rating) {
     case 'C':
-      return { rto: '15 - 30 Minutes', rpo: '5 Minutes', availability: '99.99%' };
+      return { availability: '99.99%' };
     case 'H':
-      return { rto: '2 - 4 Hours', rpo: '1 Hour', availability: '99.9%' };
+      return { availability: '99.9%' };
     case 'M':
-      return { rto: '12 - 24 Hours', rpo: '12 Hours', availability: '99.0%' };
+      return { availability: '99.0%' };
     case 'L':
-      return { rto: '48 - 72 Hours', rpo: '24 - 48 Hours', availability: 'Best Effort' };
+      return { availability: 'Best Effort' };
   }
 }
 

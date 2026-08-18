@@ -13,6 +13,7 @@ import {
   SsoConfig,
   ScimConfig,
   ScimGroupMapping,
+  ManualUserRoleMapping,
   ProvisionedUser,
   ScimAuditLog,
   ActiveSsoUser
@@ -42,9 +43,12 @@ import {
   saveScimConfig,
   loadGroupMappings,
   saveGroupMappings,
+  loadManualUserMappings,
+  saveManualUserMappings,
   loadProvisionedUsers,
   saveProvisionedUsers,
   loadScimAuditLogs,
+  loadAccessApprovalRecords,
   loadActiveSsoUser,
   saveActiveSsoUser
 } from './utils/ssoScimStorage';
@@ -69,8 +73,11 @@ import { AuditTrailView } from './components/AuditTrailView';
 import { SelfRatingView } from './components/SelfRatingView';
 import { ReviewQueueView } from './components/ReviewQueueView';
 import { SsoScimView } from './components/SsoScimView';
+import { UserManagementView } from './components/UserManagementView';
+import { RbacControlView } from './components/RbacControlView';
 import { AzureLoginModal } from './components/AzureLoginModal';
 import { SettingsModal } from './components/SettingsModal';
+import { SecurityReportsView } from './components/SecurityReportsView';
 
 export default function App() {
   // Database State
@@ -88,6 +95,7 @@ export default function App() {
   const [ssoConfig, setSsoConfig] = useState<SsoConfig>(loadSsoConfig());
   const [scimConfig, setScimConfig] = useState<ScimConfig>(loadScimConfig());
   const [groupMappings, setGroupMappings] = useState<ScimGroupMapping[]>([]);
+  const [manualMappings, setManualMappings] = useState<ManualUserRoleMapping[]>([]);
   const [provisionedUsers, setProvisionedUsers] = useState<ProvisionedUser[]>([]);
   const [scimLogs, setScimLogs] = useState<ScimAuditLog[]>([]);
   const [activeSsoUser, setActiveSsoUser] = useState<ActiveSsoUser>(loadActiveSsoUser());
@@ -126,6 +134,7 @@ export default function App() {
     const loadedSso = loadSsoConfig();
     const loadedScim = loadScimConfig();
     const loadedMappings = loadGroupMappings();
+    const loadedManual = loadManualUserMappings();
     const loadedUsers = loadProvisionedUsers();
     const loadedScimLogs = loadScimAuditLogs();
     const loadedActiveSso = loadActiveSsoUser();
@@ -138,6 +147,7 @@ export default function App() {
     setSsoConfig(loadedSso);
     setScimConfig(loadedScim);
     setGroupMappings(loadedMappings);
+    setManualMappings(loadedManual);
     setProvisionedUsers(loadedUsers);
     setScimLogs(loadedScimLogs);
     setActiveSsoUser(loadedActiveSso);
@@ -170,12 +180,74 @@ export default function App() {
     saveActiveSsoUser(user);
     setUserRole(user.role);
     saveUserRole(user.role);
+    setActiveTab('apps');
+    setIsAzureLoginOpen(false);
+
+    // Synchronize OIDC user identity claims into provisionedUsers directory
+    const email = user.email.toLowerCase();
+    const existingIndex = provisionedUsers.findIndex(
+      (u) => u.email.toLowerCase() === email || u.userName.toLowerCase() === email
+    );
+
+    let updatedUsers = [...provisionedUsers];
+    if (existingIndex >= 0) {
+      updatedUsers[existingIndex] = {
+        ...updatedUsers[existingIndex],
+        displayName: user.displayName || updatedUsers[existingIndex].displayName,
+        groups: user.groups && user.groups.length > 0 ? user.groups : updatedUsers[existingIndex].groups,
+        mappedRole: user.role,
+        lastSyncedAt: new Date().toISOString()
+      };
+    } else {
+      const newUser: ProvisionedUser = {
+        id: user.userId || `az-usr-${Math.floor(1000 + Math.random() * 9000)}`,
+        userName: user.email,
+        displayName: user.displayName || user.email.split('@')[0],
+        givenName: user.displayName?.split(' ')[0] || user.email.split('@')[0],
+        familyName: user.displayName?.split(' ')[1] || '',
+        email: user.email,
+        active: true,
+        groups: user.groups || ['AppSec-Engineers'],
+        mappedRole: user.role,
+        lastSyncedAt: new Date().toISOString(),
+        syncedVia: 'OIDC_IDP_PROVISIONED',
+        department: 'Microsoft Entra ID',
+        title: 'OIDC SSO Authenticated User',
+        iamStatus: 'ACTIVE',
+        addedToIamAt: new Date().toISOString(),
+        addedByIamAdmin: 'Microsoft Entra ID OIDC Provider'
+      };
+      updatedUsers = [newUser, ...updatedUsers];
+    }
+    setProvisionedUsers(updatedUsers);
+    saveProvisionedUsers(updatedUsers);
 
     addAuditLog(
       user.displayName,
       user.role,
       'UPDATE',
-      `Authenticated via Azure AD SSO (${user.email}). Effective Role: ${user.role} based on SCIM mapping.`
+      `Authenticated via Microsoft Entra ID OIDC SSO (${user.email}). Identity claims originated from OIDC. Effective Role: ${user.role}.`
+    );
+    setAuditLogs(loadAuditLogs());
+  };
+
+  const handleLogout = () => {
+    const unauth: ActiveSsoUser = {
+      isAuthenticated: false,
+      displayName: 'Guest User',
+      email: '',
+      role: 'IT_VIEWER'
+    };
+    setActiveSsoUser(unauth);
+    saveActiveSsoUser(unauth);
+    setUserRole('IT_VIEWER');
+    saveUserRole('IT_VIEWER');
+
+    addAuditLog(
+      'Guest User',
+      'IT_VIEWER',
+      'UPDATE',
+      'User logged out from application.'
     );
     setAuditLogs(loadAuditLogs());
   };
@@ -386,8 +458,6 @@ export default function App() {
             rating: finalTier,
             calculatedScore: finalScore,
             factors: finalFactors,
-            rto: assessment.rto,
-            rpo: assessment.rpo,
             internetExposed: assessment.internetExposed,
             isGamingNetwork: assessment.isGamingNetwork,
             dataClassification: assessment.dataClassification,
@@ -420,8 +490,6 @@ export default function App() {
         ownerIT: assessment.ownerIT,
         hostingEnv: assessment.hostingEnv,
         dataClassification: assessment.dataClassification,
-        rto: assessment.rto,
-        rpo: assessment.rpo,
         internetExposed: assessment.internetExposed,
         isGamingNetwork: assessment.isGamingNetwork,
         thirdPartyIntegrations: [],
@@ -661,6 +729,24 @@ export default function App() {
 
   const pendingReviewCount = pendingAssessments.filter((a) => a.status === 'PENDING_REVIEW').length;
 
+  if (!activeSsoUser || !activeSsoUser.isAuthenticated) {
+    return (
+      <AzureLoginModal
+        isOpen={true}
+        onClose={() => {}}
+        ssoConfig={ssoConfig}
+        scimConfig={scimConfig}
+        manualMappings={manualMappings}
+        provisionedUsers={provisionedUsers}
+        groupMappings={groupMappings}
+        activeSsoUser={activeSsoUser}
+        onLoginSuccess={handleLoginSuccess}
+        onLogout={handleLogout}
+        isStandalonePage={true}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900 font-sans flex flex-col antialiased">
       
@@ -686,6 +772,8 @@ export default function App() {
           auditCount={auditLogs.length}
           pendingCount={pendingReviewCount}
           scimUserCount={provisionedUsers.length}
+          groupMappingsCount={groupMappings.length}
+          provisionedUsersCount={provisionedUsers.length}
           currentRole={userRole}
           activeSsoUser={activeSsoUser}
           onOpenAzureLogin={() => setIsAzureLoginOpen(true)}
@@ -697,6 +785,39 @@ export default function App() {
         {/* Main Content Area */}
         <main className="flex-1 min-w-0 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         
+        {/* Tab: User Management */}
+        {activeTab === 'user-management' && (
+          <UserManagementView
+            provisionedUsers={provisionedUsers}
+            onUpdateUsers={(users) => {
+              setProvisionedUsers(users);
+              saveProvisionedUsers(users);
+            }}
+            onRefreshLogs={handleRefreshScimLogs}
+            currentRole={userRole}
+            activeSsoUser={activeSsoUser}
+          />
+        )}
+
+        {/* Tab: RBAC Control */}
+        {activeTab === 'rbac-control' && (
+          <RbacControlView
+            groupMappings={groupMappings}
+            onUpdateGroupMappings={(mappings) => {
+              setGroupMappings(mappings);
+              saveGroupMappings(mappings);
+            }}
+            manualMappings={manualMappings}
+            onUpdateManualMappings={(mappings) => {
+              setManualMappings(mappings);
+              saveManualUserMappings(mappings);
+            }}
+            provisionedUsers={provisionedUsers}
+            onRefreshLogs={handleRefreshScimLogs}
+            currentRole={userRole}
+          />
+        )}
+
         {/* Tab 0: Azure AD SSO & SCIM Engine */}
         {activeTab === 'sso-scim' && (
           <SsoScimView
@@ -715,6 +836,11 @@ export default function App() {
               setGroupMappings(mappings);
               saveGroupMappings(mappings);
             }}
+            manualMappings={manualMappings}
+            onUpdateManualMappings={(mappings) => {
+              setManualMappings(mappings);
+              saveManualUserMappings(mappings);
+            }}
             provisionedUsers={provisionedUsers}
             onUpdateUsers={(users) => {
               setProvisionedUsers(users);
@@ -726,6 +852,16 @@ export default function App() {
             onOpenAzureLogin={() => setIsAzureLoginOpen(true)}
             onRoleChange={handleRoleChange}
           />
+        )}
+
+        {/* Tab: ArmorCode Security Reports Generator */}
+        {activeTab === 'security-reports' && (
+          <SecurityReportsView applications={applications} initialSubTab="QUERY" />
+        )}
+
+        {/* Tab: Auditable Promotion Records */}
+        {activeTab === 'promotion-records' && (
+          <SecurityReportsView applications={applications} initialSubTab="EVIDENCES" />
         )}
 
         {/* Tab 1: Applications Database */}
@@ -800,8 +936,17 @@ export default function App() {
         {/* Tab 5: Assessment Matrix & Rubric */}
         {activeTab === 'matrix' && <AssessmentMatrixView />}
 
-        {/* Tab 6: Audit Trail */}
-        {activeTab === 'audit' && <AuditTrailView logs={auditLogs} />}
+        {/* Tab 6: Centralized Audit Trail */}
+        {activeTab === 'audit' && (
+          <AuditTrailView
+            auditLogs={auditLogs}
+            scimLogs={scimLogs}
+            accessApprovalRecords={loadAccessApprovalRecords()}
+            currentRole={userRole}
+            activeSsoUser={activeSsoUser}
+            onRefreshLogs={handleRefreshScimLogs}
+          />
+        )}
 
       </main>
       </div>
@@ -842,8 +987,13 @@ export default function App() {
         isOpen={isAzureLoginOpen}
         onClose={() => setIsAzureLoginOpen(false)}
         ssoConfig={ssoConfig}
+        scimConfig={scimConfig}
+        manualMappings={manualMappings}
+        provisionedUsers={provisionedUsers}
         groupMappings={groupMappings}
+        activeSsoUser={activeSsoUser}
         onLoginSuccess={handleLoginSuccess}
+        onLogout={handleLogout}
       />
 
       <SettingsModal

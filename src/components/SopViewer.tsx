@@ -325,7 +325,7 @@ blockquote { border-left: 4px solid #6366f1; background-color: #f8fafc; padding:
                 <span>AppSec Governance Standard</span>
               </div>
               <p>
-                All applications in the database must comply with the SLA requirements outlined in this SOP document.
+                All applications in the database must comply with the security criteria and assessment schedules outlined in this SOP document.
               </p>
             </div>
           </div>

@@ -11,17 +11,44 @@ import {
   ChevronLeft,
   ChevronRight,
   Shield,
+  ShieldCheck,
   Eye,
   Menu,
   X,
   UserCheck,
+  Users,
   ShieldAlert,
   Lock,
-  Settings
+  Settings,
+  Award,
+  ScanLine
 } from 'lucide-react';
 import { UserRole, ActiveSsoUser } from '../types';
 
-export type TabType = 'apps' | 'sso-scim' | 'self-rating' | 'review-queue' | 'sop' | 'matrix' | 'audit';
+export type TabType = 'apps' | 'sso-scim' | 'user-management' | 'rbac-control' | 'security-reports' | 'promotion-records' | 'self-rating' | 'review-queue' | 'sop' | 'matrix' | 'audit';
+
+interface NavItem {
+  id: TabType;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  badge?: string;
+  badgeBg?: string;
+  highlight?: boolean;
+  adminOnly?: boolean;
+}
+
+interface NavSubgroup {
+  name: string;
+  icon?: React.ComponentType<{ className?: string }>;
+  items: NavItem[];
+}
+
+interface NavSection {
+  group: string;
+  adminOnlySection?: boolean;
+  items?: NavItem[];
+  subgroups?: NavSubgroup[];
+}
 
 interface SidebarProps {
   activeTab: TabType;
@@ -31,6 +58,8 @@ interface SidebarProps {
   auditCount: number;
   pendingCount?: number;
   scimUserCount?: number;
+  groupMappingsCount?: number;
+  provisionedUsersCount?: number;
   currentRole: UserRole;
   activeSsoUser?: ActiveSsoUser;
   onOpenAzureLogin?: () => void;
@@ -47,6 +76,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   auditCount,
   pendingCount = 0,
   scimUserCount = 0,
+  groupMappingsCount = 0,
+  provisionedUsersCount = 0,
   currentRole,
   activeSsoUser,
   onOpenAzureLogin,
@@ -55,10 +86,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setIsMobileOpen
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const isAdmin = currentRole === 'SUPER_ADMIN' || currentRole === 'APPSEC_ADMIN';
 
-  const navigationSections = [
+  const navigationSections: NavSection[] = [
     {
-      group: 'Core Management',
+      group: 'Core Components',
       items: [
         {
           id: 'apps' as TabType,
@@ -69,13 +101,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
           adminOnly: false
         },
         {
-          id: 'sso-scim' as TabType,
-          label: 'Azure SSO & SCIM',
-          icon: KeyRound,
-          badge: scimUserCount > 0 ? `${scimUserCount} Synced` : 'Enterprise',
-          badgeBg: 'bg-blue-100 text-blue-800 font-bold dark:bg-blue-900/60 dark:text-blue-300',
-          highlight: true,
-          adminOnly: true // Restrict tab for Admin roles only
+          id: 'promotion-records' as TabType,
+          label: 'Promotion Records',
+          icon: Award,
+          badge: 'Audit',
+          badgeBg: 'bg-amber-100 text-amber-800 font-bold dark:bg-amber-900/60 dark:text-amber-300',
+          adminOnly: false
+        }
+      ],
+      subgroups: [
+        {
+          name: 'Scans',
+          icon: ScanLine,
+          items: [
+            {
+              id: 'security-reports' as TabType,
+              label: 'SAST Reports',
+              icon: ShieldCheck,
+              badge: 'API',
+              badgeBg: 'bg-emerald-100 text-emerald-800 font-bold dark:bg-emerald-900/60 dark:text-emerald-300',
+              adminOnly: false
+            }
+          ]
         }
       ]
     },
@@ -115,9 +162,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'matrix' as TabType,
           label: 'Assessment Matrix',
           icon: BarChart3,
-          badge: 'SLA',
-          badgeBg: 'bg-amber-100 text-amber-800',
+          badge: 'Matrix',
+          badgeBg: 'bg-indigo-100 text-indigo-800',
           adminOnly: false
+        }
+      ]
+    },
+    {
+      group: 'Settings',
+      adminOnlySection: true,
+      items: [
+        {
+          id: 'user-management' as TabType,
+          label: 'User Management',
+          icon: Users,
+          badge: provisionedUsersCount > 0 ? `${provisionedUsersCount}` : 'IAM',
+          badgeBg: 'bg-emerald-100 text-emerald-800 font-bold dark:bg-emerald-900/60 dark:text-emerald-300',
+          adminOnly: true
+        },
+        {
+          id: 'rbac-control' as TabType,
+          label: 'RBAC Control',
+          icon: Shield,
+          badge: groupMappingsCount > 0 ? `${groupMappingsCount} Rules` : 'Policy',
+          badgeBg: 'bg-purple-100 text-purple-800 font-bold dark:bg-purple-900/60 dark:text-purple-300',
+          adminOnly: true
+        },
+        {
+          id: 'sso-scim' as TabType,
+          label: 'SSO Configuration',
+          icon: KeyRound,
+          badge: scimUserCount > 0 ? `${scimUserCount} Synced` : 'Enterprise',
+          badgeBg: 'bg-blue-100 text-blue-800 font-bold dark:bg-blue-900/60 dark:text-blue-300',
+          highlight: true,
+          adminOnly: true
         },
         {
           id: 'audit' as TabType,
@@ -125,7 +203,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           icon: History,
           badge: `${auditCount}`,
           badgeBg: 'bg-slate-200 text-slate-700',
-          adminOnly: false
+          adminOnly: true
         }
       ]
     }
@@ -138,6 +216,73 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
     onTabChange(tab);
     setIsMobileOpen(false);
+  };
+
+  const renderNavItem = (tab: NavItem, isNested = false) => {
+    const Icon = tab.icon;
+    const isActive = activeTab === tab.id;
+    const isRestrictedForRole = tab.adminOnly && currentRole === 'IT_VIEWER';
+
+    return (
+      <button
+        key={tab.id}
+        onClick={() => handleSelectTab(tab.id, isRestrictedForRole)}
+        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all relative group cursor-pointer ${
+          isNested && !isCollapsed ? 'pl-4.5' : ''
+        } ${
+          isActive
+            ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+            : isRestrictedForRole
+            ? 'text-slate-500 bg-slate-950/40 opacity-70 hover:opacity-100 hover:bg-slate-900'
+            : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
+        }`}
+        title={
+          isCollapsed
+            ? isRestrictedForRole
+              ? `${tab.label} (Admin Only)`
+              : tab.label
+            : undefined
+        }
+      >
+        <Icon className={`w-5 h-5 shrink-0 ${isActive ? 'text-white' : isRestrictedForRole ? 'text-slate-600' : 'text-slate-400 group-hover:text-slate-200'}`} />
+
+        {!isCollapsed && (
+          <span className="truncate flex-1 text-left flex items-center justify-between">
+            <span>{tab.label}</span>
+            {isRestrictedForRole && (
+              <span className="text-[10px] font-mono text-slate-500 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 flex items-center gap-1">
+                <Lock className="w-2.5 h-2.5 text-amber-500" />
+                <span>Admin</span>
+              </span>
+            )}
+          </span>
+        )}
+
+        {tab.highlight && !isCollapsed && !isRestrictedForRole && (
+          <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-pulse shrink-0" />
+        )}
+
+        {tab.badge && !isCollapsed && !isRestrictedForRole && (
+          <span
+            className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${
+              isActive
+                ? 'bg-white/20 text-white'
+                : tab.badgeBg
+            }`}
+          >
+            {tab.badge}
+          </span>
+        )}
+
+        {/* Tooltip on collapsed desktop view */}
+        {isCollapsed && (
+          <div className="hidden md:block absolute left-full ml-2 px-2.5 py-1 bg-slate-950 text-white text-xs font-medium rounded-md shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 border border-slate-800">
+            {tab.label}
+            {isRestrictedForRole && <span className="ml-2 text-rose-400 font-mono">(Restricted)</span>}
+          </div>
+        )}
+      </button>
+    );
   };
 
   return (
@@ -174,79 +319,41 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Navigation Items Scroll Area */}
         <div className="flex-1 overflow-y-auto px-3 py-4 space-y-6 scrollbar-thin scrollbar-thumb-slate-700">
-          {navigationSections.map((section, idx) => (
-            <div key={idx} className="space-y-1">
-              {!isCollapsed && (
-                <h3 className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
-                  {section.group}
-                </h3>
-              )}
-              {section.items.map((tab) => {
-                const Icon = tab.icon;
-                const isActive = activeTab === tab.id;
-                const isRestrictedForRole = tab.adminOnly && currentRole === 'IT_VIEWER';
+          {navigationSections.map((section, idx) => {
+            if (section.adminOnlySection && !isAdmin) {
+              return null;
+            }
+            return (
+              <div key={idx} className="space-y-1">
+                {!isCollapsed && (
+                  <h3 className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                    {section.group}
+                  </h3>
+                )}
 
-                return (
-                  <button
-                    key={tab.id}
-                    onClick={() => handleSelectTab(tab.id, isRestrictedForRole)}
-                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all relative group cursor-pointer ${
-                      isActive
-                        ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
-                        : isRestrictedForRole
-                        ? 'text-slate-500 bg-slate-950/40 opacity-70 hover:opacity-100 hover:bg-slate-900'
-                        : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
-                    }`}
-                    title={
-                      isCollapsed
-                        ? isRestrictedForRole
-                          ? `${tab.label} (Admin Only)`
-                          : tab.label
-                        : undefined
-                    }
-                  >
-                    <Icon className={`w-5 h-5 shrink-0 ${isActive ? 'text-white' : isRestrictedForRole ? 'text-slate-600' : 'text-slate-400 group-hover:text-slate-200'}`} />
+                {/* Direct Items */}
+                {section.items?.map((tab) => renderNavItem(tab))}
 
-                    {!isCollapsed && (
-                      <span className="truncate flex-1 text-left flex items-center justify-between">
-                        <span>{tab.label}</span>
-                        {isRestrictedForRole && (
-                          <span className="text-[10px] font-mono text-slate-500 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 flex items-center gap-1">
-                            <Lock className="w-2.5 h-2.5 text-amber-500" />
-                            <span>Admin</span>
-                          </span>
-                        )}
-                      </span>
-                    )}
-
-                    {tab.highlight && !isCollapsed && !isRestrictedForRole && (
-                      <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-pulse shrink-0" />
-                    )}
-
-                    {tab.badge && !isCollapsed && !isRestrictedForRole && (
-                      <span
-                        className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${
-                          isActive
-                            ? 'bg-white/20 text-white'
-                            : tab.badgeBg
-                        }`}
-                      >
-                        {tab.badge}
-                      </span>
-                    )}
-
-                    {/* Tooltip on collapsed desktop view */}
-                    {isCollapsed && (
-                      <div className="hidden md:block absolute left-full ml-2 px-2.5 py-1 bg-slate-950 text-white text-xs font-medium rounded-md shadow-xl whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50 border border-slate-800">
-                        {tab.label}
-                        {isRestrictedForRole && <span className="ml-2 text-rose-400 font-mono">(Restricted)</span>}
+                {/* Subgroups */}
+                {section.subgroups?.map((subgroup, subIdx) => {
+                  const SubgroupIcon = subgroup.icon || ScanLine;
+                  return (
+                    <div key={subIdx} className="pt-1.5 space-y-1">
+                      {!isCollapsed && (
+                        <div className="flex items-center gap-1.5 px-3 py-1 text-[11px] font-semibold text-slate-400 tracking-wider uppercase">
+                          <SubgroupIcon className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>{subgroup.name}</span>
+                        </div>
+                      )}
+                      <div className={!isCollapsed ? 'pl-2 border-l border-slate-800/80 ml-3 space-y-1' : 'space-y-1'}>
+                        {subgroup.items.map((tab) => renderNavItem(tab, true))}
                       </div>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
 
         {/* Sidebar Footer: Active Authenticated SCIM Identity Info */}

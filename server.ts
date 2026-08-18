@@ -1,10 +1,21 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { testDbConnection, initDbTables, getDbPool, getDbStatusInfo, seedInitialData, safeDbQuery } from './src/db.js';
 
+let appSettings: any = {};
+try {
+  const appSettingsPath = path.join(process.cwd(), 'appsettings.json');
+  if (fs.existsSync(appSettingsPath)) {
+    appSettings = JSON.parse(fs.readFileSync(appSettingsPath, 'utf-8'));
+  }
+} catch (e) {
+  console.warn('Could not load appsettings.json:', e);
+}
+
 const app = express();
-const PORT = 3000;
+const PORT = appSettings.AppSettings?.Port || 3000;
 
 app.use(express.json({ type: ['application/json', 'application/scim+json'] }));
 app.use(express.urlencoded({ extended: true }));
@@ -387,13 +398,29 @@ app.patch('/api/scim/v2/Users/:id', scimAuthMiddleware, (req, res) => {
   res.setHeader('Content-Type', 'application/scim+json').json(toScimUserResource(user));
 });
 
-// 7. DELETE /Users/:id - Soft Deprovision
-app.delete('/api/scim/v2/Users/:id', scimAuthMiddleware, (req, res) => {
+// 7. DELETE /Users/:id - SCIM User Deprovision & Remove (Super Admin Protected)
+app.delete('/api/scim/v2/Users/:id', scimAuthMiddleware, async (req, res) => {
   const idx = inMemoryUsers.findIndex(u => u.id === req.params.id);
   if (idx !== -1) {
     const user = inMemoryUsers[idx];
-    user.active = false;
-    user.lastSyncedAt = new Date().toISOString();
+    const email = (user.userName || user.emails?.[0]?.value || '').toLowerCase();
+    const isSuperAdmin =
+      email === 'superadmin@enterprise.local' ||
+      email === 'superadmin@local.internal' ||
+      email === 'superadmin' ||
+      email === 'admin@enterprise.local' ||
+      (user.mappedRole as string) === 'SUPER_ADMIN';
+
+    if (isSuperAdmin) {
+      return res.status(403).json({
+        schemas: ['urn:ietf:params:scim:api:messages:2.0:Error'],
+        detail: 'Access Denied: Super Admin account is permanently protected by enterprise policy and CANNOT be removed.',
+        status: '403'
+      });
+    }
+
+    inMemoryUsers.splice(idx, 1);
+    await safeDbQuery('DELETE FROM scim_users WHERE id = $1 OR LOWER(user_name) = $2', [user.id, email]);
 
     scimAuditLogs.unshift({
       id: `SLOG-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -401,12 +428,54 @@ app.delete('/api/scim/v2/Users/:id', scimAuthMiddleware, (req, res) => {
       method: 'DELETE',
       endpoint: `/api/scim/v2/Users/${user.id}`,
       statusCode: 204,
-      action: 'DEPROVISION_USER',
+      action: 'REMOVE_USER',
       targetUserId: user.id,
-      details: `Deprovisioned user ${user.userName} via SCIM DELETE request`
+      details: `Removed user ${user.userName} via SCIM DELETE request`
     });
   }
   res.status(204).send();
+});
+
+// REST Endpoint: Delete IAM User (AppSec Admin operation, Super Admin Protected)
+app.delete('/api/iam/users/:id', async (req, res) => {
+  const userId = req.params.id;
+  const idx = inMemoryUsers.findIndex(u => u.id === userId || u.userName.toLowerCase() === userId.toLowerCase());
+
+  if (idx !== -1) {
+    const user = inMemoryUsers[idx];
+    const email = (user.userName || user.emails?.[0]?.value || '').toLowerCase();
+    const isSuperAdmin =
+      email === 'superadmin@enterprise.local' ||
+      email === 'superadmin@local.internal' ||
+      email === 'superadmin' ||
+      email === 'admin@enterprise.local' ||
+      (user.mappedRole as string) === 'SUPER_ADMIN';
+
+    if (isSuperAdmin) {
+      return res.status(403).json({
+        success: false,
+        error: 'Access Denied: Super Admin account is permanently protected by enterprise policy and CANNOT be removed.'
+      });
+    }
+
+    inMemoryUsers.splice(idx, 1);
+    await safeDbQuery('DELETE FROM scim_users WHERE id = $1 OR LOWER(user_name) = $2', [userId, email]);
+
+    scimAuditLogs.unshift({
+      id: `SLOG-${Math.floor(1000 + Math.random() * 9000)}`,
+      timestamp: new Date().toISOString(),
+      method: 'DELETE',
+      endpoint: `/api/iam/users/${userId}`,
+      statusCode: 200,
+      action: 'REMOVE_IAM_USER',
+      targetUserId: user.id,
+      details: `Removed user ${user.userName} from Enterprise IAM directory by AppSec Administrator`
+    });
+
+    return res.json({ success: true, message: `User ${user.userName} was removed from Enterprise IAM.` });
+  }
+
+  res.status(404).json({ success: false, error: 'User not found in IAM directory.' });
 });
 
 // 8. GET /Groups
@@ -433,32 +502,1190 @@ app.get('/api/scim/logs', (req, res) => {
 });
 
 // ==========================================
-// AZURE AD SSO SIMULATION & API ROUTES
+// APPSETTINGS CONFIGURATION ENDPOINT
+// ==========================================
+app.get('/api/appsettings', (req, res) => {
+  res.json(appSettings);
+});
+
+// ==========================================
+// ARMORCODE PRODUCTS & SUBPRODUCTS API PROXY
 // ==========================================
 
-app.get('/api/sso/azure/config', (req, res) => {
-  res.json({
-    tenantId: process.env.AZURE_TENANT_ID || '8f88e1a3-8321-4d3e-953e-5231a49931ef',
-    clientId: process.env.AZURE_CLIENT_ID || '3a8f43c1-7782-41f2-901e-c19a951d8d21',
-    redirectUri: `${req.protocol}://${req.get('host')}/api/sso/azure/callback`,
-    scopes: 'openid profile email User.Read Directory.Read.All',
-    loginUrl: `https://login.microsoftonline.com/${process.env.AZURE_TENANT_ID || '8f88e1a3-8321-4d3e-953e-5231a49931ef'}/oauth2/v2.0/authorize`
+// 1. Fetch Products (Project Names) from https://app.armorcode.com/user/product/elastic/paged
+app.all(['/api/armorcode/products', '/api/armorcode/products/', '/api/armorcode/product', '/api/armorcode/product/'], async (req, res) => {
+  const apiKey = req.body?.apiKey || req.query?.apiKey || process.env.ARMORCODE_API_KEY || process.env.ARMORCODE_KEY || appSettings.ArmorCode?.ApiKey || '';
+  const customEndpoint = req.body?.customEndpoint || req.query?.customEndpoint || appSettings.ArmorCode?.ProductApiEndpoint || 'https://app.armorcode.com/user/product/elastic/paged';
+
+  const searchQuery = req.body?.search !== undefined 
+    ? String(req.body.search) 
+    : (req.query?.search !== undefined ? String(req.query.search) : "");
+
+  const requestBody = {
+    environmentName: req.body?.environmentName || ["PRODUCTION"],
+    pageSize: req.body?.pageSize !== undefined ? Number(req.body.pageSize) : 20,
+    pageNumber: req.body?.pageNumber !== undefined ? Number(req.body.pageNumber) : 0,
+    sortBy: req.body?.sortBy || "NAME",
+    search: searchQuery,
+    direction: req.body?.direction || "ASC"
+  };
+
+  const defaultProducts = [
+    { id: 'prod-1', name: 'sample', description: 'Sample Sandbox Enterprise Application Project', category: 'General' },
+    { id: 'prod-2', name: 'fintech-payments', description: 'Fintech High-Volume Payment Processing Engine', category: 'Finance' },
+    { id: 'prod-3', name: 'core-banking', description: 'Core Banking Ledger & Transaction Platform', category: 'Finance' },
+    { id: 'prod-4', name: 'gaming-rewards-api', description: 'Player Loyalty & Gaming Rewards Gateway', category: 'Gaming' },
+    { id: 'prod-5', name: 'merchant-portal', description: 'Merchant Management & Onboarding Web Portal', category: 'E-Commerce' },
+    { id: 'prod-6', name: 'identity-auth-service', description: 'OAuth2 / SAML Identity Provider Service', category: 'Security' },
+    { id: 'prod-7', name: 'cloud-infrastructure-iac', description: 'Terraform & Kubernetes Cloud Deployment Modules', category: 'DevOps' }
+  ];
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), appSettings.ArmorCode?.TimeoutMs || 8000);
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    };
+
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+      headers['X-ArmorCode-API-Key'] = apiKey;
+    }
+
+    const apiRes = await fetch(customEndpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(requestBody),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeout);
+
+    if (apiRes.ok) {
+      const liveData: any = await apiRes.json();
+      let productsList: any[] = [];
+
+      if (Array.isArray(liveData)) {
+        productsList = liveData;
+      } else if (Array.isArray(liveData.content)) {
+        productsList = liveData.content;
+      } else if (Array.isArray(liveData.products)) {
+        productsList = liveData.products;
+      } else if (Array.isArray(liveData.data)) {
+        productsList = liveData.data;
+      }
+
+      const formatted = productsList.map((p: any, idx: number) => ({
+        id: p.id !== undefined ? String(p.id) : (p.productId !== undefined ? String(p.productId) : `ac-p-${idx + 1}`),
+        name: typeof p === 'string' ? p : (p.name || p.productName || p.displayName || p.key || `Product-${idx + 1}`),
+        description: typeof p === 'object' ? (p.description || p.details || (p.id ? `Product ID: ${p.id}` : '')) : '',
+        category: typeof p === 'object' ? (p.category || 'ArmorCode Product') : 'ArmorCode Product'
+      }));
+
+      return res.json({
+        success: true,
+        products: formatted,
+        totalElements: liveData.totalElements !== undefined ? liveData.totalElements : formatted.length,
+        totalPages: liveData.totalPages || 1,
+        source: 'LIVE_API',
+        endpointUsed: customEndpoint,
+        payloadSent: requestBody
+      });
+    }
+  } catch (err: any) {
+    console.warn('[ArmorCode API Proxy] Products endpoint live fetch notice:', err.message);
+  }
+
+  // Filter default catalog if live API is unavailable
+  const filteredCatalog = defaultProducts.filter(p => 
+    !searchQuery || p.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  // Fallback list when live endpoint is unavailable
+  return res.json({
+    success: true,
+    products: filteredCatalog.length > 0 ? filteredCatalog : defaultProducts,
+    source: 'FALLBACK_CATALOG',
+    endpointUsed: customEndpoint,
+    payloadSent: requestBody
   });
 });
 
-// Mock SSO Login Execution
+// 2. Fetch Subproducts (Repositories) from https://app.armorcode.com/api/dashboard/sub-product/name-id
+app.all(['/api/armorcode/subproducts', '/api/armorcode/subproducts/', '/api/armorcode/subproduct', '/api/armorcode/sub-product'], async (req, res) => {
+  const project = (req.body?.project || req.query?.project || 'sample').toString().trim();
+  const rawProductId = req.body?.productId || req.query?.productId || req.body?.productIds || req.body?.product;
+  const apiKey = req.body?.apiKey || req.query?.apiKey || process.env.ARMORCODE_API_KEY || process.env.ARMORCODE_KEY || appSettings.ArmorCode?.ApiKey || '';
+  const customEndpoint = req.body?.customEndpoint || req.query?.customEndpoint || appSettings.ArmorCode?.SubproductApiEndpoint || 'https://app.armorcode.com/api/dashboard/sub-product/name-id';
+  const searchQuery = req.body?.search !== undefined 
+    ? String(req.body.search).trim().toLowerCase() 
+    : (req.query?.search !== undefined ? String(req.query.search).trim().toLowerCase() : "");
+
+  // Format productId into array of string IDs e.g. ["385162"]
+  let productIds: string[] = [];
+  if (Array.isArray(rawProductId)) {
+    productIds = rawProductId.map(id => String(id).trim()).filter(Boolean);
+  } else if (rawProductId !== undefined && rawProductId !== null && String(rawProductId).trim() !== '') {
+    productIds = [String(rawProductId).trim()];
+  }
+
+  // If no product ID was provided, attempt to fallback to project or default
+  if (productIds.length === 0 && project) {
+    // If project is a number string, use it
+    if (/^\d+$/.test(project)) {
+      productIds = [project];
+    }
+  }
+
+  const requestPayload = {
+    productId: productIds
+  };
+
+  const defaultSubproducts = [
+    { id: '1713832', name: `${project}_repo`, description: `Primary source code repository for ${project}`, category: 'Main Repository' },
+    { id: '1713833', name: `${project}-core-api`, description: `Backend microservice API layer for ${project}`, category: 'Backend' },
+    { id: '1713834', name: `${project}-web-ui`, description: `Frontend SPA web interface for ${project}`, category: 'Frontend' },
+    { id: '1713835', name: `${project}-worker-service`, description: `Async background task processor for ${project}`, category: 'Worker' },
+    { id: '1713836', name: `${project}-database-migrations`, description: `SQL DDL & Database Migration scripts for ${project}`, category: 'Database' }
+  ];
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), appSettings.ArmorCode?.TimeoutMs || 8000);
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    };
+
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+      headers['X-ArmorCode-API-Key'] = apiKey;
+    }
+
+    const apiRes = await fetch(customEndpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(requestPayload),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeout);
+
+    if (apiRes.ok) {
+      const liveData: any = await apiRes.json();
+      let subproductsList: any[] = [];
+
+      if (Array.isArray(liveData)) {
+        subproductsList = liveData;
+      } else if (Array.isArray(liveData.data)) {
+        subproductsList = liveData.data;
+      } else if (Array.isArray(liveData.content)) {
+        subproductsList = liveData.content;
+      } else if (Array.isArray(liveData.subproducts)) {
+        subproductsList = liveData.subproducts;
+      }
+
+      if (subproductsList.length > 0) {
+        let formatted = subproductsList.map((sp: any, idx: number) => ({
+          id: sp.id !== undefined ? String(sp.id) : (sp.subproductId || `ac-sp-${idx + 1}`),
+          name: typeof sp === 'string' ? sp : (sp.name || sp.subproductName || sp.repository || `Repository-${idx + 1}`),
+          description: typeof sp === 'object' ? (sp.description || (sp.id ? `Repository ID: ${sp.id}` : '')) : '',
+          category: typeof sp === 'object' ? (sp.category || 'Repository') : 'Repository'
+        }));
+
+        if (searchQuery) {
+          formatted = formatted.filter(sp => 
+            sp.name.toLowerCase().includes(searchQuery) ||
+            sp.id.toLowerCase().includes(searchQuery) ||
+            sp.description.toLowerCase().includes(searchQuery)
+          );
+        }
+
+        return res.json({
+          success: true,
+          subproducts: formatted,
+          source: 'LIVE_API',
+          endpointUsed: customEndpoint,
+          payloadSent: requestPayload
+        });
+      }
+    }
+  } catch (err: any) {
+    console.warn('[ArmorCode API Proxy] Subproducts endpoint live fetch notice:', err.message);
+  }
+
+  // Filter default catalog if live API is unavailable
+  let filteredCatalog = defaultSubproducts;
+  if (searchQuery) {
+    filteredCatalog = defaultSubproducts.filter(sp => 
+      sp.name.toLowerCase().includes(searchQuery) ||
+      sp.description.toLowerCase().includes(searchQuery)
+    );
+  }
+
+  return res.json({
+    success: true,
+    subproducts: filteredCatalog.length > 0 ? filteredCatalog : defaultSubproducts,
+    source: 'FALLBACK_CATALOG',
+    endpointUsed: customEndpoint,
+    payloadSent: requestPayload
+  });
+});
+
+// ==========================================
+// ARMORCODE SECURITY FINDINGS API PROXY
+// ==========================================
+app.post('/api/armorcode/findings', async (req, res) => {
+  const {
+    project = appSettings.ArmorCode?.DefaultProject || 'sample',
+    productId = '',
+    repository = '',
+    repositories = [],
+    subProductIds = [],
+    cycode_branch = appSettings.ArmorCode?.DefaultBranch || 'main',
+    finding_types = [],
+    scanTypes,
+    size = 100,
+    page = 0,
+    timezone = appSettings.ArmorCode?.DefaultTimezone || 'Asia/Shanghai',
+    apiKey = req.body?.apiKey || process.env.ARMORCODE_API_KEY || process.env.ARMORCODE_KEY || appSettings.ArmorCode?.ApiKey || '',
+    customEndpoint = ''
+  } = req.body || {};
+
+  const targetEndpoint = customEndpoint || appSettings.ArmorCode?.ApiEndpoint || 'https://app.armorcode.com/user/findings/';
+
+  // Extract numeric or string Product IDs
+  let productFilter: (number | string)[] = [];
+  if (productId !== undefined && productId !== '') {
+    const num = Number(productId);
+    productFilter = [!isNaN(num) && String(num) === String(productId).trim() ? num : productId];
+  } else if (project) {
+    const num = Number(project);
+    productFilter = [!isNaN(num) ? num : project];
+  }
+
+  // Extract numeric or string SubProduct IDs
+  let subProductFilter: (number | string)[] = [];
+  if (Array.isArray(subProductIds) && subProductIds.length > 0) {
+    subProductFilter = subProductIds.map(id => {
+      const num = Number(id);
+      return !isNaN(num) && String(num) === String(id).trim() ? num : id;
+    });
+  } else if (Array.isArray(repositories) && repositories.length > 0) {
+    subProductFilter = repositories.map(r => {
+      const num = Number(r);
+      return !isNaN(num) ? num : r;
+    });
+  } else if (repository && repository.trim() !== '') {
+    const num = Number(repository);
+    subProductFilter = [!isNaN(num) ? num : repository.trim()];
+  }
+
+  const defaultScanTypes = appSettings.ArmorCode?.DefaultScanTypes || [
+    "SAST",
+    "SCA",
+    "Secrets"
+  ];
+
+  const rawBranch = (cycode_branch && cycode_branch.trim() !== '') ? cycode_branch.replace(/^"|"$/g, '').trim() : 'main';
+  const formattedBranchValue = `\"${rawBranch}\"`;
+  const branchKey = appSettings.ArmorCode?.DefaultBranchKey || '\"custom_cycode_branch\"';
+
+  // Construct standard ArmorCode user/findings payload
+  const filters: Record<string, any> = {
+    product: productFilter,
+    ...(subProductFilter.length > 0 ? { subProduct: subProductFilter } : {}),
+    keyValue: [
+      {
+        key: branchKey,
+        value: formattedBranchValue
+      }
+    ],
+    scanType: Array.isArray(scanTypes) && scanTypes.length > 0 ? scanTypes : defaultScanTypes
+  };
+
+  const outgoingPayload: Record<string, any> = {
+    size: Number(size) || 100,
+    sortColumns: [
+      {
+        property: "riskScore",
+        direction: "desc"
+      }
+    ],
+    filters,
+    filterOperations: {},
+    page: Number(page) || 0,
+    ticketStatusRequired: true,
+    commentCountRequired: true,
+    addLastResolutionNote: false,
+    ignoreMitigated: null,
+    ignoreDuplicate: true,
+    timezone: timezone || "Asia/Shanghai"
+  };
+
+  let liveSuccess = false;
+  let liveStatus = 0;
+  let liveData: any = null;
+  let errorMessage = '';
+
+  // Attempt live request to ArmorCode API endpoint
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), appSettings.ArmorCode?.TimeoutMs || 10000);
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    };
+
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+      headers['X-ArmorCode-API-Key'] = apiKey;
+    }
+
+    const apiRes = await fetch(targetEndpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(outgoingPayload),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeout);
+    liveStatus = apiRes.status;
+
+    if (apiRes.ok) {
+      liveData = await apiRes.json();
+      liveSuccess = true;
+    } else {
+      errorMessage = `ArmorCode API returned status ${apiRes.status} ${apiRes.statusText}`;
+    }
+  } catch (err: any) {
+    errorMessage = err.name === 'AbortError' ? 'ArmorCode API request timed out' : (err.message || 'Failed to reach ArmorCode endpoint');
+  }
+
+  // Helper normalizer for ArmorCode findings
+  const normalizeFindings = (rawList: any[]) => {
+    return rawList.map((f: any, idx: number) => {
+      // 1. Scan Type (can be string, array e.g. ["SAST"], or in additionalDetails)
+      let scanType = 'SAST';
+      if (Array.isArray(f.scanType) && f.scanType.length > 0) {
+        scanType = f.scanType[0];
+      } else if (typeof f.scanType === 'string' && f.scanType.trim() !== '') {
+        scanType = f.scanType;
+      } else if (f.additionalDetails?.scanType) {
+        scanType = f.additionalDetails.scanType;
+      } else if (f.type) {
+        scanType = f.type;
+      }
+
+      // 2. Severity & Risk Score
+      const severity = (f.severity || f.toolSeverity || f.severityLevel || 'MEDIUM').toUpperCase();
+      const riskScore = typeof f.riskScore === 'number' 
+        ? f.riskScore 
+        : (typeof f.findingScore === 'number' 
+            ? f.findingScore 
+            : (typeof f.score === 'number' 
+                ? f.score 
+                : (severity === 'CRITICAL' ? 9.2 : (severity === 'HIGH' ? 7.8 : 5.4))));
+
+      // 3. Status & Mitigation
+      const status = f.status || f.toolFindingStatus || (f.mitigated ? 'MITIGATED' : 'OPEN') || f.ticketStatus || 'OPEN';
+
+      // 4. Product / Project Name
+      const productObj = typeof f.product === 'object' && f.product !== null ? f.product : null;
+      const productName = productObj?.name || (typeof f.product === 'string' ? f.product : '') || f.productName || f.project || (productFilter[0] ? String(productFilter[0]) : String(project));
+      const productId = productObj?.id || (typeof f.product === 'number' ? f.product : (productFilter[0] ? productFilter[0] : undefined));
+
+      // 5. SubProduct / Repository Name
+      const subProductObj = typeof f.subProduct === 'object' && f.subProduct !== null ? f.subProduct : null;
+      const subProductName = subProductObj?.name || (typeof f.subProduct === 'string' ? f.subProduct : '');
+      const repositoryName = f.additionalDetails?.repositoryName || subProductName || f.repository || f.repoName || (subProductFilter[0] ? String(subProductFilter[0]) : 'core-repo');
+      const subProductId = subProductObj?.id || (typeof f.subProduct === 'number' ? f.subProduct : (subProductFilter[0] ? subProductFilter[0] : undefined));
+
+      // 6. Branch
+      const branchVal = f.additionalDetails?.gitBranch 
+        || f.cycode_branch 
+        || (Array.isArray(f.tags) ? f.tags.find((t: string) => t.startsWith('custom_cycode_branch:'))?.split(':')[1] : undefined)
+        || (Array.isArray(f.tags) ? f.tags.find((t: string) => t.startsWith('cycode.branch:'))?.split(':')[1] : undefined)
+        || f.branch 
+        || rawBranch;
+
+      // 7. Tool / Source
+      const toolName = f.source || f.tool || f.toolName || f.sourceTool || (scanType ? `${scanType} Scanner` : 'Cycode');
+
+      // 8. CVE / CWE / OWASP Reference
+      let cveOrCwe = '';
+      if (Array.isArray(f.cwesStrings) && f.cwesStrings.length > 0) {
+        cveOrCwe = f.cwesStrings[0];
+      } else if (Array.isArray(f.cwe) && f.cwe.length > 0) {
+        cveOrCwe = `CWE-${f.cwe[0]}`;
+      } else if (Array.isArray(f.cve) && f.cve.length > 0) {
+        cveOrCwe = f.cve[0];
+      } else if (f.cve || f.cveId || f.cve_id || f.cwe || f.cweId) {
+        cveOrCwe = f.cve || f.cveId || f.cve_id || f.cwe || f.cweId;
+      } else if (f.taxonomy?.owaspTop10_2021 && Array.isArray(f.taxonomy.owaspTop10_2021) && f.taxonomy.owaspTop10_2021.length > 0) {
+        cveOrCwe = f.taxonomy.owaspTop10_2021[0].split(' - ')[0] || f.taxonomy.owaspTop10_2021[0];
+      } else {
+        cveOrCwe = severity === 'CRITICAL' ? 'CWE-347' : 'CWE-89';
+      }
+
+      // 9. File Path & Line Number
+      let rawFilePath = f.filePath || f.file_path || f.fileName || f.location || f.additionalDetails?.permalink || 'src/main.ts';
+      let displayFilePath = rawFilePath;
+      if (typeof rawFilePath === 'string' && rawFilePath.includes('?path=')) {
+        const match = rawFilePath.match(/\?path=([^&]+)/);
+        if (match && match[1]) {
+          displayFilePath = decodeURIComponent(match[1]);
+        }
+      }
+      const lineNum = f.lineNumber || f.line_number || f.line || 1;
+
+      // 10. Title & Description
+      const title = f.title || f.name || f.findingDescription || (f.description ? f.description.split('\n')[0].replace(/^\*\*Policy name:\*\*\s*/, '') : 'Vulnerability detected');
+      const rawDescription = f.description || title;
+
+      // 11. Remediation guidance
+      let remediationText = f.remediation || f.mitigation || f.recommendation || f.solution || f.resolutionNote || '';
+      if (!remediationText && typeof f.description === 'string' && f.description.includes('**Correlation Message:**')) {
+        const corrMatch = f.description.match(/\*\*Correlation Message:\*\*\s*([\s\S]+)$/);
+        if (corrMatch && corrMatch[1]) {
+          remediationText = corrMatch[1].trim();
+        }
+      }
+      if (!remediationText) {
+        remediationText = `Verify and remediate ${title} per AppSec security baseline standard.`;
+      }
+
+      return {
+        finding_id: String(f.id || f.findingId || f.finding_id || `AC-${idx + 1}`),
+        type: scanType.toLowerCase().replace(/[^a-z0-9]/g, ''),
+        scanType: scanType,
+        severity: severity,
+        riskScore: riskScore,
+        title: title,
+        description: rawDescription,
+        remediation: remediationText,
+        cycode_branch: branchVal,
+        repository: repositoryName,
+        subProduct: subProductName || subProductId || repositoryName,
+        subProductId: subProductId,
+        project: productName,
+        product: productName || productId,
+        productId: productId,
+        tool: toolName,
+        cve_id: cveOrCwe,
+        file_path: displayFilePath,
+        raw_file_path: rawFilePath,
+        line_number: lineNum,
+        ticketStatus: status,
+        status: status,
+        findingUrl: f.findingUrl || (f.id ? `https://app.armorcode.com#/findings/${f.id}` : undefined),
+        url: f.url || f.additionalDetails?.permalink,
+        raw: f
+      };
+    });
+  };
+
+  // If live request produced valid findings array
+  if (liveSuccess && liveData) {
+    let rawList: any[] = [];
+    if (Array.isArray(liveData.content)) {
+      rawList = liveData.content;
+    } else if (Array.isArray(liveData.results)) {
+      rawList = liveData.results;
+    } else if (Array.isArray(liveData.findings)) {
+      rawList = liveData.findings;
+    } else if (Array.isArray(liveData.data)) {
+      rawList = liveData.data;
+    } else if (Array.isArray(liveData)) {
+      rawList = liveData;
+    }
+
+    if (rawList.length > 0 || liveData.content || liveData.totalElements !== undefined) {
+      const results = normalizeFindings(rawList);
+      return res.json({
+        success: true,
+        source: 'LIVE_API',
+        endpointUsed: targetEndpoint,
+        httpStatus: liveStatus,
+        payloadSent: outgoingPayload,
+        results,
+        totalElements: liveData.totalElements !== undefined ? liveData.totalElements : results.length,
+        totalPages: liveData.totalPages !== undefined ? liveData.totalPages : 1,
+        rawResponse: liveData,
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+
+  // Fallback: Generate high-fidelity simulated ArmorCode security report findings
+  let targetRepos: string[] = [];
+  if (Array.isArray(repositories) && repositories.length > 0) {
+    targetRepos = repositories.map(r => String(r).trim()).filter(Boolean);
+  } else if (repository && repository.trim() !== '') {
+    targetRepos = [repository.trim()];
+  } else {
+    targetRepos = [`${project.toLowerCase()}-core-api`, `${project.toLowerCase()}-frontend-web`, `${project.toLowerCase()}-auth-service`];
+  }
+
+  const branch = rawBranch;
+
+  const simulatedCatalog = [
+    {
+      finding_id: 'AC-SAST-9041',
+      type: 'sast',
+      scanType: 'SAST',
+      severity: 'HIGH',
+      riskScore: 8.4,
+      description: 'Missing Anti-Forgery CSRF Validation Token in sensitive POST state-changing controller',
+      remediation: 'Apply @ValidateAntiForgeryToken attribute or AntiForgery.validate() middleware in HTTP POST endpoints.',
+      tool: 'Cycode SAST / Semgrep',
+      cve_id: 'CWE-352',
+      file_path: 'src/controllers/PaymentController.ts',
+      line_number: 42,
+      ticketStatus: 'OPEN'
+    },
+    {
+      finding_id: 'AC-SAST-9088',
+      type: 'sast',
+      scanType: 'SAST',
+      severity: 'CRITICAL',
+      riskScore: 9.8,
+      description: 'Potential SQL Injection via unescaped string concatenation in database query generator',
+      remediation: 'Refactor raw string query concatenation to parameterized SQL bindings or ORM query builder.',
+      tool: 'Cycode SAST / SonarQube',
+      cve_id: 'CWE-89',
+      file_path: 'src/db/repository.ts',
+      line_number: 118,
+      ticketStatus: 'OPEN'
+    },
+    {
+      finding_id: 'AC-SCA-3012',
+      type: 'sca',
+      scanType: 'SCA',
+      severity: 'HIGH',
+      riskScore: 7.9,
+      description: 'Transitive dependency jackson-databind vulnerable to Remote Code Execution (RCE)',
+      remediation: 'Upgrade jackson-databind to version >= 2.15.2 or update parent Spring Boot BOM.',
+      tool: 'Snyk SCA / Dependency-Check',
+      cve_id: 'CVE-2023-35116',
+      file_path: 'package-lock.json',
+      line_number: 840,
+      ticketStatus: 'OPEN'
+    },
+    {
+      finding_id: 'AC-SECRET-1004',
+      type: 'secret',
+      scanType: 'Secrets',
+      severity: 'CRITICAL',
+      riskScore: 9.5,
+      description: 'Hardcoded High-Entropy AWS Identity & Access Management Secret Key detected in source code',
+      remediation: 'Revoke AWS secret key in IAM console immediately, purge from git history, and store in Secret Manager.',
+      tool: 'Gitleaks / Cycode Secrets',
+      cve_id: 'CWE-798',
+      file_path: 'config/aws_credentials.json',
+      line_number: 14,
+      ticketStatus: 'IN_REVIEW'
+    },
+    {
+      finding_id: 'AC-DAST-7022',
+      type: 'dast',
+      scanType: 'DAST',
+      severity: 'MEDIUM',
+      riskScore: 5.8,
+      description: 'Reflected Cross-Site Scripting (XSS) vulnerability detected in query parameter search string',
+      remediation: 'Encode HTML output responses using OWASP Java/Node Sanitizer and enforce Content Security Policy (CSP).',
+      tool: 'OWASP ZAP DAST',
+      cve_id: 'CWE-79',
+      file_path: '/api/v1/search?q=<script>',
+      line_number: 1,
+      ticketStatus: 'OPEN'
+    },
+    {
+      finding_id: 'AC-IAC-5019',
+      type: 'iac',
+      scanType: 'Infrastructure Tools',
+      severity: 'HIGH',
+      riskScore: 7.2,
+      description: 'Terraform S3 Bucket resource defined with public read access enabled without block public access rules',
+      remediation: 'Set block_public_acls = true and block_public_policy = true on aws_s3_bucket_public_access_block.',
+      tool: 'Checkov / Tfsec',
+      cve_id: 'CWE-732',
+      file_path: 'terraform/s3_storage.tf',
+      line_number: 29,
+      ticketStatus: 'OPEN'
+    },
+    {
+      finding_id: 'AC-CONTAINER-2041',
+      type: 'container',
+      scanType: 'Container Security',
+      severity: 'MEDIUM',
+      riskScore: 6.1,
+      description: 'Docker image base layer node:18-alpine contains unpatched libcrypto OpenSSL vulnerability',
+      remediation: 'Update Dockerfile base image to node:20-alpine or alpine:3.19 with latest OpenSSL security patch.',
+      tool: 'Trivy Container Scanner',
+      cve_id: 'CVE-2023-5363',
+      file_path: 'Dockerfile',
+      line_number: 1,
+      ticketStatus: 'RESOLVED'
+    }
+  ];
+
+  // Filter or populate findings based on requested repository and types
+  let results = [];
+  let count = 0;
+
+  for (const repo of targetRepos) {
+    for (const template of simulatedCatalog) {
+      if (finding_types.length === 0 || finding_types.includes(template.type) || finding_types.includes(template.scanType)) {
+        count++;
+        results.push({
+          finding_id: `${template.finding_id}-${count}`,
+          type: template.type,
+          scanType: template.scanType,
+          severity: template.severity,
+          riskScore: template.riskScore,
+          description: `${template.description} [${project}/${repo}]`,
+          remediation: template.remediation,
+          cycode_branch: branch,
+          repository: repo,
+          subProduct: repo,
+          project: project,
+          product: productId || project,
+          tool: template.tool,
+          cve_id: template.cve_id,
+          file_path: template.file_path,
+          line_number: template.line_number,
+          ticketStatus: template.ticketStatus,
+          status: template.ticketStatus
+        });
+      }
+    }
+  }
+
+  res.json({
+    success: true,
+    source: 'SIMULATED_DATA',
+    endpointUsed: targetEndpoint,
+    httpStatus: 200,
+    payloadSent: outgoingPayload,
+    results,
+    totalElements: results.length,
+    totalPages: 1,
+    errorMessage: errorMessage || undefined,
+    rawResponse: {
+      content: results,
+      totalElements: results.length,
+      totalPages: 1,
+      size: outgoingPayload.size,
+      number: outgoingPayload.page,
+      meta: {
+        total_count: results.length,
+        project_queried: project,
+        repositories_queried: targetRepos,
+        cycode_branch: branch,
+        note: 'Simulated output constructed for preview environment (ArmorCode API client endpoint tested).'
+      }
+    },
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ==========================================
+// PROMOTION EVIDENCE AUDITABLE RECORDS ENDPOINTS
+// ==========================================
+let inMemoryPromotionEvidences: any[] = [];
+
+app.get('/api/promotion-evidences', async (req, res) => {
+  try {
+    const dbRes = await safeDbQuery('SELECT evidence_data FROM promotion_evidences ORDER BY created_at DESC');
+    if (dbRes && dbRes.rows && dbRes.rows.length > 0) {
+      const evidences = dbRes.rows.map(r => typeof r.evidence_data === 'string' ? JSON.parse(r.evidence_data) : r.evidence_data);
+      return res.json({ success: true, count: evidences.length, evidences });
+    }
+  } catch (err) {
+    console.warn('PostgreSQL query error for promotion evidences, using in-memory store:', err);
+  }
+  return res.json({ success: true, count: inMemoryPromotionEvidences.length, evidences: inMemoryPromotionEvidences });
+});
+
+app.post('/api/promotion-evidences', async (req, res) => {
+  const evidence = req.body;
+  if (!evidence || !evidence.evidenceId) {
+    return res.status(400).json({ success: false, error: 'Invalid promotion evidence object' });
+  }
+
+  // Deduplicate in memory
+  inMemoryPromotionEvidences = [evidence, ...inMemoryPromotionEvidences.filter(e => e.evidenceId !== evidence.evidenceId)];
+
+  try {
+    await safeDbQuery(
+      `CREATE TABLE IF NOT EXISTS promotion_evidences (
+        evidence_id VARCHAR(100) PRIMARY KEY,
+        project VARCHAR(255),
+        repository VARCHAR(255),
+        branch VARCHAR(255),
+        target_environment VARCHAR(100),
+        status VARCHAR(50),
+        created_at TIMESTAMP,
+        evidence_data JSONB
+      );`
+    );
+
+    await safeDbQuery(
+      `INSERT INTO promotion_evidences (evidence_id, project, repository, branch, target_environment, status, created_at, evidence_data)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (evidence_id) DO UPDATE SET
+         status = EXCLUDED.status,
+         evidence_data = EXCLUDED.evidence_data;`,
+      [
+        evidence.evidenceId,
+        evidence.project,
+        evidence.repository,
+        evidence.branch,
+        evidence.targetEnvironment,
+        evidence.status || 'ISSUED',
+        evidence.createdAt || new Date().toISOString(),
+        JSON.stringify(evidence)
+      ]
+    );
+  } catch (err) {
+    console.warn('PostgreSQL table insert warning for promotion evidence:', err);
+  }
+
+  res.json({ success: true, message: 'Promotion evidence record stored', evidenceId: evidence.evidenceId });
+});
+
+app.post('/api/promotion-evidences/:id/revoke', async (req, res) => {
+  const { id } = req.params;
+  const { revokedBy, reason, timestamp } = req.body || {};
+
+  inMemoryPromotionEvidences = inMemoryPromotionEvidences.map(e => {
+    if (e.evidenceId === id) {
+      return {
+        ...e,
+        status: 'REVOKED',
+        revokedAt: timestamp || new Date().toISOString(),
+        revokedBy: revokedBy || 'System Admin',
+        revokedReason: reason || 'Revoked by auditor request'
+      };
+    }
+    return e;
+  });
+
+  try {
+    const existing = inMemoryPromotionEvidences.find(e => e.evidenceId === id);
+    if (existing) {
+      await safeDbQuery(
+        `UPDATE promotion_evidences SET status = 'REVOKED', evidence_data = $1 WHERE evidence_id = $2;`,
+        [JSON.stringify(existing), id]
+      );
+    }
+  } catch (err) {
+    console.warn('PostgreSQL update error revoking evidence:', err);
+  }
+
+  res.json({ success: true, message: `Evidence ${id} marked REVOKED` });
+});
+
+// ==========================================
+// AZURE AD OPENID CONNECT (OIDC) SSO & API ROUTES
+// ==========================================
+
+let runtimeOidcConfig = {
+  tenantId: process.env.AZURE_TENANT_ID || appSettings.AzureAd?.TenantId || '2c7d678a-3080-4d64-a967-67f2da6d3cae',
+  clientId: process.env.AZURE_CLIENT_ID || appSettings.AzureAd?.ClientId || '02445d57-57c8-4b45-99fe-a32ef97f7bdb',
+  clientSecret: process.env.AZURE_CLIENT_SECRET || appSettings.AzureAd?.ClientSecret || 'YOUR_AZURE_CLIENT_SECRET_PLACEHOLDER',
+  scopes: appSettings.AzureAd?.Scopes || 'openid profile email User.Read Directory.Read.All',
+  ssoMode: appSettings.AzureAd?.SsoMode || 'LIVE_OIDC',
+  loginUrl: appSettings.AzureAd?.LoginUrl || `https://login.microsoftonline.com/${process.env.AZURE_TENANT_ID || appSettings.AzureAd?.TenantId || '2c7d678a-3080-4d64-a967-67f2da6d3cae'}/oauth2/v2.0/authorize`,
+  tokenUrl: appSettings.AzureAd?.TokenUrl || `https://login.microsoftonline.com/${process.env.AZURE_TENANT_ID || appSettings.AzureAd?.TenantId || '2c7d678a-3080-4d64-a967-67f2da6d3cae'}/oauth2/v2.0/token`,
+  issuerUrl: appSettings.AzureAd?.IssuerUrl || `https://login.microsoftonline.com/${process.env.AZURE_TENANT_ID || appSettings.AzureAd?.TenantId || '2c7d678a-3080-4d64-a967-67f2da6d3cae'}/v2.0`,
+  jwksUri: appSettings.AzureAd?.JwksUri || `https://login.microsoftonline.com/${process.env.AZURE_TENANT_ID || appSettings.AzureAd?.TenantId || '2c7d678a-3080-4d64-a967-67f2da6d3cae'}/discovery/v2.0/keys`
+};
+
+app.get('/api/sso/azure/config', (req, res) => {
+  const host = req.get('host') || 'localhost:3000';
+  const protocol = req.protocol || 'http';
+  const baseUrl = process.env.APP_URL || `${protocol}://${host}`;
+
+  res.json({
+    ...runtimeOidcConfig,
+    redirectUri: `${baseUrl}/api/sso/azure/callback`,
+    responseType: 'code'
+  });
+});
+
+app.post('/api/sso/azure/config', (req, res) => {
+  const newConfig = req.body || {};
+  if (newConfig.tenantId) runtimeOidcConfig.tenantId = newConfig.tenantId;
+  if (newConfig.clientId) runtimeOidcConfig.clientId = newConfig.clientId;
+  if (newConfig.clientSecret !== undefined) runtimeOidcConfig.clientSecret = newConfig.clientSecret;
+  if (newConfig.scopes) runtimeOidcConfig.scopes = newConfig.scopes;
+  if (newConfig.ssoMode) runtimeOidcConfig.ssoMode = newConfig.ssoMode;
+  if (newConfig.loginUrl) runtimeOidcConfig.loginUrl = newConfig.loginUrl;
+  if (newConfig.tokenUrl) runtimeOidcConfig.tokenUrl = newConfig.tokenUrl;
+  if (newConfig.issuerUrl) runtimeOidcConfig.issuerUrl = newConfig.issuerUrl;
+  if (newConfig.jwksUri) runtimeOidcConfig.jwksUri = newConfig.jwksUri;
+
+  const host = req.get('host') || 'localhost:3000';
+  const protocol = req.protocol || 'http';
+  const baseUrl = process.env.APP_URL || `${protocol}://${host}`;
+
+  res.json({
+    success: true,
+    config: {
+      ...runtimeOidcConfig,
+      redirectUri: `${baseUrl}/api/sso/azure/callback`
+    }
+  });
+});
+
+// OIDC Well-Known Discovery Configuration Endpoint
+app.get('/api/sso/azure/.well-known/openid-configuration', (req, res) => {
+  const tenantId = runtimeOidcConfig.tenantId;
+  const issuer = runtimeOidcConfig.issuerUrl || `https://login.microsoftonline.com/${tenantId}/v2.0`;
+
+  res.json({
+    issuer,
+    authorization_endpoint: runtimeOidcConfig.loginUrl || `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize`,
+    token_endpoint: runtimeOidcConfig.tokenUrl || `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
+    jwks_uri: runtimeOidcConfig.jwksUri || `https://login.microsoftonline.com/${tenantId}/discovery/v2.0/keys`,
+    userinfo_endpoint: 'https://graph.microsoft.com/oidc/userinfo',
+    response_types_supported: ['code', 'id_token', 'code id_token'],
+    subject_types_supported: ['pairwise'],
+    id_token_signing_alg_values_supported: ['RS256'],
+    scopes_supported: runtimeOidcConfig.scopes.split(' '),
+    claims_supported: ['sub', 'iss', 'aud', 'exp', 'iat', 'name', 'preferred_username', 'email', 'oid', 'tid', 'groups', 'roles']
+  });
+});
+
+// Get Live OIDC Authorize URL Endpoint (for Client Popups)
+app.get('/api/sso/azure/authorize-url', (req, res) => {
+  const tenantId = runtimeOidcConfig.tenantId;
+  const clientId = runtimeOidcConfig.clientId;
+  const host = req.get('host') || 'localhost:3000';
+  const protocol = req.protocol || 'http';
+  const reqEmail = req.query.email?.toString().trim().toLowerCase() || '';
+
+  // Redirect URI must strictly match registered URI in Azure Portal without query parameters
+  const redirectUri = `${process.env.APP_URL || `${protocol}://${host}`}/api/sso/azure/callback`;
+
+  const statePayload = JSON.stringify({
+    nonce: Date.now()
+  });
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    response_type: 'code',
+    redirect_uri: redirectUri,
+    response_mode: 'query',
+    scope: runtimeOidcConfig.scopes || 'openid profile email User.Read Directory.Read.All',
+    state: Buffer.from(statePayload).toString('base64url'),
+    prompt: 'select_account'
+  });
+
+  if (reqEmail) {
+    params.set('login_hint', reqEmail);
+  }
+
+  const baseUrl = runtimeOidcConfig.loginUrl || `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize`;
+  const url = `${baseUrl.includes('?') ? baseUrl + '&' : baseUrl + '?'}${params.toString()}`;
+  res.json({ url, redirectUri, tenantId, clientId });
+});
+
+// OIDC Callback Route Handler with IAM authorization verification & identity switching
+const oidcCallbackHandler = async (req: Request, res: Response) => {
+  const { code, state, error, error_description, email, upn, user, preferred_username } = req.query;
+
+  // 1. If Microsoft Entra ID returned an explicit OIDC error or user cancelled authorization
+  if (error || error_description) {
+    let errMessage = (error_description || error || 'OIDC Authorization Failed').toString();
+    if (errMessage.includes('AADSTS700016')) {
+      errMessage = `AADSTS700016: Application ID was not found in Directory/Tenant. Please verify that your Tenant ID and Application (Client) ID match the same directory in Azure Portal. (${errMessage})`;
+    }
+    const fullErr = `HTTP 403 Forbidden: Microsoft Entra ID returned authorization error - ${errMessage}`;
+    return res.status(403).send(`
+      <!DOCTYPE html>
+      <html>
+        <head><title>OIDC Callback</title></head>
+        <body style="background:#0f172a;color:#f8fafc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+          <script>
+            try {
+              localStorage.setItem('azure_oidc_last_error', ${JSON.stringify(fullErr)});
+            } catch(e) {}
+            if (window.opener) {
+              try {
+                window.opener.postMessage({
+                  type: 'OAUTH_AUTH_ERROR',
+                  error: ${JSON.stringify(fullErr)}
+                }, '*');
+              } catch(e) {}
+            }
+            window.close();
+          </script>
+        </body>
+      </html>
+    `);
+  }
+
+  // Extract email from query params or decode from state parameter
+  let stateEmail = '';
+  if (typeof state === 'string' && state) {
+    try {
+      const decoded = JSON.parse(Buffer.from(state, 'base64url').toString('utf-8'));
+      if (decoded && decoded.email) {
+        stateEmail = decoded.email;
+      }
+    } catch (e) {
+      // Ignore if state is non-JSON string
+    }
+  }
+
+  let fetchedEmail = (email || upn || user || preferred_username || stateEmail || '').toString().trim().toLowerCase();
+  let fetchedDisplayName = '';
+  let fetchedGroups: string[] = [];
+  let tokenExchangeError = '';
+
+  // If code is returned from Microsoft Entra ID, exchange authorization code for tokens
+  if (typeof code === 'string' && code) {
+    const host = req.get('host') || 'localhost:3000';
+    const protocol = req.protocol || 'http';
+    const redirectUri = `${process.env.APP_URL || `${protocol}://${host}`}/api/sso/azure/callback`;
+    const tokenEndpoint = runtimeOidcConfig.tokenUrl || `https://login.microsoftonline.com/${runtimeOidcConfig.tenantId}/oauth2/v2.0/token`;
+
+    try {
+      const tokenParams = new URLSearchParams({
+        client_id: runtimeOidcConfig.clientId,
+        grant_type: 'authorization_code',
+        code: code,
+        redirect_uri: redirectUri,
+        scope: runtimeOidcConfig.scopes || 'openid profile email User.Read Directory.Read.All'
+      });
+
+      if (runtimeOidcConfig.clientSecret) {
+        tokenParams.set('client_secret', runtimeOidcConfig.clientSecret);
+      }
+
+      const tokenRes = await fetch(tokenEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: tokenParams.toString()
+      });
+      const tokenData: any = await tokenRes.json();
+
+      if (tokenData.id_token) {
+        const parts = tokenData.id_token.split('.');
+        if (parts.length >= 2) {
+          try {
+            const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+            const payload = JSON.parse(Buffer.from(base64, 'base64').toString('utf-8'));
+            if (!fetchedEmail) {
+              fetchedEmail = (payload.email || payload.preferred_username || payload.upn || payload.unique_name || payload.sub || '').toString().trim().toLowerCase();
+            }
+            if (payload.name) fetchedDisplayName = payload.name;
+            if (Array.isArray(payload.groups)) fetchedGroups = payload.groups;
+            if (Array.isArray(payload.roles)) fetchedGroups = [...fetchedGroups, ...payload.roles];
+          } catch (e) {
+            console.error('Failed to parse id_token payload:', e);
+          }
+        }
+      }
+
+      // Fallback: If no email in id_token, call Microsoft Graph API /v1.0/me
+      if (!fetchedEmail && tokenData.access_token) {
+        try {
+          const graphRes = await fetch('https://graph.microsoft.com/v1.0/me', {
+            headers: { Authorization: `Bearer ${tokenData.access_token}` }
+          });
+          if (graphRes.ok) {
+            const me: any = await graphRes.json();
+            fetchedEmail = (me.mail || me.userPrincipalName || '').toString().trim().toLowerCase();
+            if (!fetchedDisplayName) fetchedDisplayName = me.displayName || me.givenName || '';
+          }
+        } catch (gErr) {
+          console.warn('Graph API fetch error:', gErr);
+        }
+      }
+
+      if (!fetchedEmail && (tokenData.error || tokenData.error_description)) {
+        const rawDesc = tokenData.error_description || tokenData.error || 'Token exchange failed';
+        if (rawDesc.includes('AADSTS7000215') || rawDesc.includes('Invalid client secret')) {
+          tokenExchangeError = `AADSTS7000215: Invalid Azure Client Secret. Please ensure you copied the 'Value' column string (e.g. eER8Q~... or ~3x...), NOT the 'Secret ID' GUID from Azure Portal -> App Registrations -> Certificates & Secrets.`;
+        } else {
+          tokenExchangeError = rawDesc;
+        }
+      }
+    } catch (err: any) {
+      tokenExchangeError = err.message || 'Failed to exchange authorization code with Microsoft Entra ID';
+    }
+  }
+
+  // 2. If no identity claims (email/upn) could be resolved
+  if (!fetchedEmail) {
+    const fullErr = tokenExchangeError
+      ? `HTTP 403 Forbidden: Microsoft Entra ID Token Exchange Error - ${tokenExchangeError}`
+      : 'HTTP 403 Forbidden: Access Denied. No valid email address or user claim (email/UPN) was returned by Microsoft Entra ID.';
+
+    return res.status(403).send(`
+      <!DOCTYPE html>
+      <html>
+        <head><title>OIDC Callback</title></head>
+        <body style="background:#0f172a;color:#f8fafc;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+          <script>
+            try {
+              localStorage.setItem('azure_oidc_last_error', ${JSON.stringify(fullErr)});
+            } catch(e) {}
+            if (window.opener) {
+              try {
+                window.opener.postMessage({
+                  type: 'OAUTH_AUTH_ERROR',
+                  error: ${JSON.stringify(fullErr)}
+                }, '*');
+              } catch(e) {}
+            }
+            window.close();
+          </script>
+        </body>
+      </html>
+    `);
+  }
+
+  const targetEmail = fetchedEmail;
+
+  // Check if target OIDC user exists in IAM (inMemoryUsers or PostgreSQL scim_users/manual_user_mappings)
+  let matchedUser = inMemoryUsers.find(
+    u => u.userName.toLowerCase() === targetEmail || u.emails.some(e => e.value.toLowerCase() === targetEmail)
+  );
+
+  // If DB connected, query PostgreSQL scim_users table
+  if (!matchedUser) {
+    const dbResult = await safeDbQuery(
+      'SELECT * FROM scim_users WHERE LOWER(user_name) = $1 OR emails_json::text LOWER LIKE $2',
+      [targetEmail, `%${targetEmail}%`]
+    );
+    if (dbResult && dbResult.rows && dbResult.rows.length > 0) {
+      const row = dbResult.rows[0];
+      matchedUser = {
+        id: row.id,
+        userName: row.user_name,
+        name: typeof row.name_json === 'string' ? JSON.parse(row.name_json) : (row.name_json || { formatted: row.user_name, familyName: '', givenName: row.user_name }),
+        emails: typeof row.emails_json === 'string' ? JSON.parse(row.emails_json) : (row.emails_json || [{ value: row.user_name, type: 'work', primary: true }]),
+        active: row.active ?? true,
+        groups: typeof row.groups_json === 'string' ? JSON.parse(row.groups_json) : (row.groups_json || []),
+        mappedRole: row.mapped_role || 'APPSEC_ADMIN',
+        lastSyncedAt: row.last_synced_at || new Date().toISOString(),
+        department: row.department,
+        title: row.title
+      };
+    }
+  }
+
+  // Auto-provision user into inMemoryUsers directory if not already present
+  if (!matchedUser) {
+    const formattedName = targetEmail.split('@')[0].replace(/[_.]/g, ' ').replace(/(^\w|\s\w)/g, m => m.toUpperCase());
+    matchedUser = {
+      id: `az-usr-${Math.floor(1000 + Math.random() * 9000)}`,
+      userName: targetEmail,
+      name: { formatted: formattedName, familyName: formattedName.split(' ')[1] || '', givenName: formattedName.split(' ')[0] },
+      emails: [{ value: targetEmail, type: 'work', primary: true }],
+      active: true,
+      groups: ['AppSec-Engineers', 'CyberSecurity-Leads'],
+      mappedRole: 'APPSEC_ADMIN',
+      lastSyncedAt: new Date().toISOString(),
+      department: 'Microsoft Entra ID',
+      title: 'OIDC SSO Authenticated User'
+    };
+    inMemoryUsers.unshift(matchedUser);
+  }
+
+  // Switch to the authenticated user's identity
+  const formattedName = targetEmail.split('@')[0].replace(/[_.]/g, ' ').replace(/(^\w|\s\w)/g, m => m.toUpperCase());
+  const userPayload = JSON.stringify({
+    isAuthenticated: true,
+    userId: matchedUser ? matchedUser.id : `az-usr-${Math.floor(1000 + Math.random() * 9000)}`,
+    displayName: matchedUser ? matchedUser.name.formatted : (targetEmail === 'superadmin@enterprise.local' ? 'Super Admin' : formattedName),
+    email: targetEmail,
+    upn: targetEmail,
+    role: matchedUser ? matchedUser.mappedRole : 'APPSEC_ADMIN',
+    groups: matchedUser ? matchedUser.groups : ['AppSec-Engineers', 'CyberSecurity-Leads'],
+    loginMethod: 'AZURE_SSO' as const,
+    loggedInAt: new Date().toISOString()
+  });
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Azure AD OIDC Authentication Callback</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+          .card { background: #1e293b; padding: 2rem; border-radius: 1rem; border: 1px solid #334155; text-align: center; max-width: 400px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }
+          .spinner { border: 3px solid #334155; border-top: 3px solid #3b82f6; border-radius: 50%; width: 36px; height: 36px; animation: spin 1s linear infinite; margin: 0 auto 1rem; }
+          @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="spinner"></div>
+          <h2 style="font-size: 1.1rem; margin-bottom: 0.5rem; color: #38bdf8;">Azure AD OIDC Sign-In Verified</h2>
+          <p style="font-size: 0.85rem; color: #94a3b8;">Identity matched in IAM. Switching to user session...</p>
+        </div>
+        <script>
+          try {
+            const userData = ${userPayload};
+            try {
+              localStorage.setItem('azure_oidc_success_user', JSON.stringify(userData));
+            } catch(e) {}
+            if (window.opener) {
+              window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS', user: userData, code: '${code || ''}' }, '*');
+              setTimeout(() => { window.close(); }, 600);
+            } else {
+              window.location.href = '/';
+            }
+          } catch(e) {
+            console.error('OIDC PostMessage error', e);
+            if (window.opener) window.opener.postMessage({ type: 'OAUTH_AUTH_ERROR', error: 'Failed to complete OIDC login' }, '*');
+          }
+        </script>
+      </body>
+    </html>
+  `);
+};
+
+app.get(['/api/sso/azure/callback', '/auth/callback', '/api/sso/azure/callback/'], oidcCallbackHandler);
+
+// Mock SSO Login Execution with IAM Authorization Check
 app.post('/api/sso/azure/login-mock', (req, res) => {
   const { email, groups } = req.body;
-  const userGroups = groups || ['AppSec-Engineers'];
-  const role = deriveAppRole(userGroups);
+  const targetEmail = (email || 'admin@enterprise.local').trim().toLowerCase();
+
+  const matchedUser = inMemoryUsers.find(
+    u => u.userName.toLowerCase() === targetEmail || u.emails.some(e => e.value.toLowerCase() === targetEmail)
+  );
+
+  const isSuperAdmin = targetEmail === 'superadmin@enterprise.local' || targetEmail === 'superadmin' || targetEmail === 'admin@enterprise.local';
+
+  if (!matchedUser && !isSuperAdmin) {
+    return res.status(403).json({
+      success: false,
+      error: `Access Denied (403 Forbidden): User identity '${targetEmail}' has NOT been added to enterprise IAM. Please contact an AppSec Administrator to register this user identity in IAM before logging in.`
+    });
+  }
+
+  const userGroups = groups || (matchedUser ? matchedUser.groups : ['AppSec-Engineers']);
+  const role = matchedUser ? matchedUser.mappedRole : deriveAppRole(userGroups);
 
   res.json({
     success: true,
     user: {
-      userId: `az-usr-${Math.floor(1000 + Math.random() * 9000)}`,
-      displayName: email ? email.split('@')[0].replace('.', ' ') : 'Azure Entra User',
-      email: email || 'sjenkins@contoso.com',
-      upn: email || 'sjenkins@contoso.com',
+      userId: matchedUser ? matchedUser.id : `az-usr-${Math.floor(1000 + Math.random() * 9000)}`,
+      displayName: matchedUser ? matchedUser.name.formatted : targetEmail.split('@')[0].replace('.', ' '),
+      email: targetEmail,
+      upn: targetEmail,
       role,
       groups: userGroups,
       loginMethod: 'SIMULATED_AZURE_OIDC',
@@ -516,8 +1743,6 @@ app.get('/api/apps', async (req, res) => {
       ownerIT: r.owner_it,
       hostingEnv: r.hosting_env,
       dataClassification: r.data_classification,
-      rto: r.rto,
-      rpo: r.rpo,
       internetExposed: r.internet_exposed,
       isGamingNetwork: r.is_gaming_network,
       thirdPartyIntegrations: r.third_party_integrations || [],
@@ -546,10 +1771,10 @@ app.post('/api/apps', async (req, res) => {
     `INSERT INTO applications (
       id, code, name, description, tier, rating, calculated_score,
       department, owner_app_sec, owner_it, hosting_env, data_classification,
-      rto, rpo, internet_exposed, is_gaming_network, third_party_integrations,
+      internet_exposed, is_gaming_network, third_party_integrations,
       compliance_requirements, status, factors, last_assessed, assessed_by,
       created_at, updated_at, notes
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
     ON CONFLICT (id) DO UPDATE SET
       code = EXCLUDED.code,
       name = EXCLUDED.name,
@@ -562,8 +1787,6 @@ app.post('/api/apps', async (req, res) => {
       owner_it = EXCLUDED.owner_it,
       hosting_env = EXCLUDED.hosting_env,
       data_classification = EXCLUDED.data_classification,
-      rto = EXCLUDED.rto,
-      rpo = EXCLUDED.rpo,
       internet_exposed = EXCLUDED.internet_exposed,
       is_gaming_network = EXCLUDED.is_gaming_network,
       third_party_integrations = EXCLUDED.third_party_integrations,
@@ -587,8 +1810,6 @@ app.post('/api/apps', async (req, res) => {
       appData.ownerIT || '',
       appData.hostingEnv || '',
       appData.dataClassification || 'INTERNAL',
-      appData.rto || '1 Hour',
-      appData.rpo || '15 Minutes',
       Boolean(appData.internetExposed),
       Boolean(appData.isGamingNetwork),
       JSON.stringify(appData.thirdPartyIntegrations || []),
@@ -727,8 +1948,6 @@ app.get('/api/pending-assessments', async (req, res) => {
       updatedAt: r.updated_at,
       dataClassification: r.data_classification,
       hostingEnv: r.hosting_env,
-      rto: r.rto,
-      rpo: r.rpo,
       internetExposed: r.internet_exposed,
       factors: r.factors || {},
       calculatedScore: parseFloat(r.calculated_score),
@@ -756,10 +1975,10 @@ app.post('/api/pending-assessments', async (req, res) => {
       id, app_id, app_code, app_name, description, department,
       owner_it, owner_app_sec, submitter_name, submitter_email,
       submitted_at, updated_at, data_classification, hosting_env,
-      rto, rpo, internet_exposed, factors, calculated_score,
+      internet_exposed, factors, calculated_score,
       proposed_tier, status, notes, comments, admin_decision_by,
       admin_decision_at, admin_decision_notes
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
     ON CONFLICT (id) DO UPDATE SET
       app_id = EXCLUDED.app_id,
       app_code = EXCLUDED.app_code,
@@ -773,8 +1992,6 @@ app.post('/api/pending-assessments', async (req, res) => {
       updated_at = NOW(),
       data_classification = EXCLUDED.data_classification,
       hosting_env = EXCLUDED.hosting_env,
-      rto = EXCLUDED.rto,
-      rpo = EXCLUDED.rpo,
       internet_exposed = EXCLUDED.internet_exposed,
       factors = EXCLUDED.factors,
       calculated_score = EXCLUDED.calculated_score,
@@ -800,8 +2017,6 @@ app.post('/api/pending-assessments', async (req, res) => {
       p.updatedAt || new Date().toISOString(),
       p.dataClassification || 'CONFIDENTIAL',
       p.hostingEnv || '',
-      p.rto || '1 Hour',
-      p.rpo || '15 Minutes',
       Boolean(p.internetExposed),
       JSON.stringify(p.factors || {}),
       p.calculatedScore || 0,

@@ -16,7 +16,6 @@ import {
   Copy,
   Info,
   Shield,
-  Clock,
   X
 } from 'lucide-react';
 
@@ -433,12 +432,6 @@ export const AppTable: React.FC<AppTableProps> = ({
                   </div>
                 </th>
                 <th className="py-3 px-4">Department & Hosting</th>
-                <th className="py-3 px-4">
-                  <div className="flex items-center gap-1" title="Recovery Time Objective / Recovery Point Objective">
-                    <Clock className="w-3 h-3 text-slate-400" />
-                    <span>IT SLAs (RTO / RPO)</span>
-                  </div>
-                </th>
                 <th className="py-3 px-4">Data Class & Compliance</th>
                 <th className="py-3 px-4">AppSec & IT Owners</th>
                 <th className="py-3 px-4 text-right">Actions</th>
@@ -449,7 +442,7 @@ export const AppTable: React.FC<AppTableProps> = ({
             <tbody className="divide-y divide-slate-100">
               {filteredApps.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-500">
+                  <td colSpan={6} className="py-12 text-center text-slate-500">
                     <div className="max-w-sm mx-auto space-y-2">
                       <Shield className="w-8 h-8 text-slate-300 mx-auto" />
                       <p className="font-medium text-slate-700">No applications matched your filter criteria.</p>
@@ -542,20 +535,6 @@ export const AppTable: React.FC<AppTableProps> = ({
                         </div>
                         <div className="text-slate-400 text-[11px] font-mono mt-0.5">
                           Status: <span className="capitalize text-slate-600">{app.status.toLowerCase().replace('_', ' ')}</span>
-                        </div>
-                      </td>
-
-                      {/* IT SLAs (RTO & RPO) */}
-                      <td className="py-3.5 px-4 whitespace-nowrap font-mono text-slate-700">
-                        <div className="space-y-0.5">
-                          <div>
-                            <span className="text-slate-400 text-[10px] uppercase font-sans mr-1">RTO:</span>
-                            <span className="font-semibold text-slate-900">{app.rto}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-400 text-[10px] uppercase font-sans mr-1">RPO:</span>
-                            <span className="text-slate-600">{app.rpo}</span>
-                          </div>
                         </div>
                       </td>
 
