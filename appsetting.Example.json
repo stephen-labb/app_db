@@ -6,7 +6,7 @@
     }
   },
   "ConnectionStrings": {
-    "DefaultConnection": "Server=127.0.0.1;Port=5432;Database=app_db;User Id=admin;Password=P@ssw0rd;"
+    "DefaultConnection": "Server=127.0.0.1;Port=5432;Database=<DB_NAME>;User Id=<DB_USER>;Password=<DB_PASSWORD>;"
   },
   "Database": {
     "Host": "127.0.0.1",
