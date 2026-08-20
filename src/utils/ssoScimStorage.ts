@@ -33,7 +33,7 @@ export const DEFAULT_SSO_CONFIG: SsoConfig = {
   clientSecret: appSettings.AzureAd?.ClientSecret || 'YOUR_AZURE_CLIENT_SECRET_PLACEHOLDER',
   redirectUri: typeof window !== 'undefined' ? `${window.location.origin}/api/sso/azure/callback` : (appSettings.AzureAd?.RedirectUri || '/api/sso/azure/callback'),
   scopes: appSettings.AzureAd?.Scopes || 'openid profile email User.Read Directory.Read.All',
-  ssoMode: (appSettings.AzureAd?.SsoMode as any) || 'LIVE_OIDC',
+  ssoMode: 'LIVE_OIDC',
   enforceSso: appSettings.AzureAd?.EnforceSso ?? false,
   loginUrl: appSettings.AzureAd?.LoginUrl || `https://login.microsoftonline.com/${appSettings.AzureAd?.TenantId || '2c7d678a-3080-4d64-a967-67f2da6d3cae'}/oauth2/v2.0/authorize`,
   tokenUrl: appSettings.AzureAd?.TokenUrl || `https://login.microsoftonline.com/${appSettings.AzureAd?.TenantId || '2c7d678a-3080-4d64-a967-67f2da6d3cae'}/oauth2/v2.0/token`,
@@ -50,173 +50,11 @@ export const DEFAULT_SCIM_CONFIG: ScimConfig = {
   requireAdminApproval: true
 };
 
-export const DEFAULT_MANUAL_USER_MAPPINGS: ManualUserRoleMapping[] = [
-  {
-    id: 'MAN-1001',
-    emailOrUpn: 'admin@enterprise.local',
-    assignedRole: 'APPSEC_ADMIN',
-    notes: 'Default AppSec Administrator override for primary enterprise admin account',
-    createdAt: new Date().toISOString(),
-    updatedBy: 'System Default',
-    updatedAt: new Date().toISOString()
-  }
-];
+export const DEFAULT_MANUAL_USER_MAPPINGS: ManualUserRoleMapping[] = [];
 
-export const DEFAULT_GROUP_MAPPINGS: ScimGroupMapping[] = [
-  {
-    id: 'MAP-1001',
-    azureGroupOrRoleName: 'AppSec-Engineers',
-    azureGroupId: 'b19e2e10-9112-4f3b-8280-9900223a1099',
-    appRole: 'APPSEC_ADMIN',
-    description: 'Grants full CRUD AppSec Admin permissions to members of Azure AD Security Group AppSec-Engineers',
-    createdAt: new Date(Date.now() - 30 * 86400000).toISOString()
-  },
-  {
-    id: 'MAP-1002',
-    azureGroupOrRoleName: 'CyberSecurity-Leads',
-    azureGroupId: 'c44e9912-8821-4c12-9122-1100223a4411',
-    appRole: 'APPSEC_ADMIN',
-    description: 'Grants full CRUD AppSec Admin permissions to CyberSecurity Lead Role in Azure Entra ID',
-    createdAt: new Date(Date.now() - 25 * 86400000).toISOString()
-  },
-  {
-    id: 'MAP-1003',
-    azureGroupOrRoleName: 'IT-Operations-Viewers',
-    azureGroupId: 'd88f1122-3344-5566-7788-9900aabbccdd',
-    appRole: 'IT_VIEWER',
-    description: 'Grants Read-Only Viewer permissions to IT Operations staff',
-    createdAt: new Date(Date.now() - 20 * 86400000).toISOString()
-  },
-  {
-    id: 'MAP-1004',
-    azureGroupOrRoleName: 'SOC-Analyst-Auditor',
-    azureGroupId: 'e99a0011-2233-4455-6677-889900aabbcc',
-    appRole: 'IT_VIEWER',
-    description: 'Grants Read-Only Viewer permissions to SOC Security Analysts',
-    createdAt: new Date(Date.now() - 15 * 86400000).toISOString()
-  }
-];
+export const DEFAULT_GROUP_MAPPINGS: ScimGroupMapping[] = [];
 
-export const INITIAL_PROVISIONED_USERS: ProvisionedUser[] = [
-  {
-    id: 'az-usr-1001',
-    userName: 'sjenkins@contoso.com',
-    displayName: 'Sarah Jenkins',
-    givenName: 'Sarah',
-    familyName: 'Jenkins',
-    email: 'sjenkins@contoso.com',
-    active: true,
-    groups: ['AppSec-Engineers', 'CyberSecurity-Leads'],
-    mappedRole: 'APPSEC_ADMIN',
-    lastSyncedAt: new Date().toISOString(),
-    syncedVia: 'IAM_DIRECTORY',
-    department: 'InfoSec',
-    title: 'Lead Application Security Engineer',
-    iamStatus: 'ACTIVE',
-    addedToIamAt: new Date(Date.now() - 30 * 86400000).toISOString(),
-    addedByIamAdmin: 'AppSec Governance Admin',
-    approvalStatus: 'APPROVED',
-    approvedBy: 'AppSec Governance Admin',
-    approvedAt: new Date(Date.now() - 30 * 86400000).toISOString()
-  },
-  {
-    id: 'az-usr-1002',
-    userName: 'admin@enterprise.local',
-    displayName: 'Primary Enterprise Admin',
-    givenName: 'AppSec',
-    familyName: 'Admin',
-    email: 'admin@enterprise.local',
-    active: true,
-    groups: ['AppSec-Engineers', 'Global-Security-Admins'],
-    mappedRole: 'APPSEC_ADMIN',
-    lastSyncedAt: new Date().toISOString(),
-    syncedVia: 'IAM_DIRECTORY',
-    department: 'Cybersecurity',
-    title: 'Enterprise Security Director',
-    iamStatus: 'ACTIVE',
-    addedToIamAt: new Date(Date.now() - 60 * 86400000).toISOString(),
-    addedByIamAdmin: 'System Provisioning Engine',
-    approvalStatus: 'APPROVED',
-    approvedBy: 'System Provisioning Engine',
-    approvedAt: new Date(Date.now() - 60 * 86400000).toISOString()
-  },
-  {
-    id: 'az-usr-1003',
-    userName: 'dchen@contoso.com',
-    displayName: 'David Chen',
-    givenName: 'David',
-    familyName: 'Chen',
-    email: 'dchen@contoso.com',
-    active: true,
-    groups: ['IT-Operations-Viewers'],
-    mappedRole: 'IT_VIEWER',
-    lastSyncedAt: new Date().toISOString(),
-    syncedVia: 'IAM_DIRECTORY',
-    department: 'IT Infrastructure',
-    title: 'Senior IT Specialist',
-    iamStatus: 'ACTIVE',
-    addedToIamAt: new Date(Date.now() - 20 * 86400000).toISOString(),
-    addedByIamAdmin: 'AppSec Governance Admin',
-    approvalStatus: 'APPROVED',
-    approvedBy: 'AppSec Governance Admin',
-    approvedAt: new Date(Date.now() - 20 * 86400000).toISOString()
-  },
-  {
-    id: 'az-usr-1004',
-    userName: 'arivera@contoso.com',
-    displayName: 'Alex Rivera',
-    givenName: 'Alex',
-    familyName: 'Rivera',
-    email: 'arivera@contoso.com',
-    active: true,
-    groups: ['SOC-Analyst-Auditor'],
-    mappedRole: 'IT_VIEWER',
-    lastSyncedAt: new Date().toISOString(),
-    syncedVia: 'IAM_DIRECTORY',
-    department: 'Compliance & Audit',
-    title: 'SOC Auditor',
-    iamStatus: 'ACTIVE',
-    addedToIamAt: new Date(Date.now() - 15 * 86400000).toISOString(),
-    addedByIamAdmin: 'AppSec Governance Admin',
-    approvalStatus: 'APPROVED',
-    approvedBy: 'AppSec Governance Admin',
-    approvedAt: new Date(Date.now() - 15 * 86400000).toISOString()
-  },
-  {
-    id: 'az-usr-1005',
-    userName: 'mross@contoso.com',
-    displayName: 'Mark Ross',
-    givenName: 'Mark',
-    familyName: 'Ross',
-    email: 'mross@contoso.com',
-    active: false,
-    groups: ['AppSec-Engineers'],
-    mappedRole: 'APPSEC_ADMIN',
-    lastSyncedAt: new Date(Date.now() - 2 * 3600000).toISOString(),
-    syncedVia: 'AZURE_SSO',
-    department: 'DevSecOps',
-    title: 'Cloud Security Systems Engineer',
-    iamStatus: 'SUSPENDED',
-    approvalStatus: 'PENDING_APPROVAL'
-  },
-  {
-    id: 'az-usr-1006',
-    userName: 'mvance@contoso.com',
-    displayName: 'Marcus Vance',
-    givenName: 'Marcus',
-    familyName: 'Vance',
-    email: 'mvance@contoso.com',
-    active: false,
-    groups: ['IT-Operations-Viewers'],
-    mappedRole: 'IT_VIEWER',
-    lastSyncedAt: new Date(Date.now() - 5 * 3600000).toISOString(),
-    syncedVia: 'SCIM_2.0',
-    department: 'Network Operations',
-    title: 'NOC Lead Analyst',
-    iamStatus: 'SUSPENDED',
-    approvalStatus: 'PENDING_APPROVAL'
-  }
-];
+export const INITIAL_PROVISIONED_USERS: ProvisionedUser[] = [];
 
 export const INITIAL_SCIM_LOGS: ScimAuditLog[] = [];
 
@@ -620,89 +458,7 @@ export function addScimAuditLog(
   return newLog;
 }
 
-export const INITIAL_ACCESS_APPROVAL_RECORDS: AccessApprovalRecord[] = [
-  {
-    id: 'APR-2026-8812',
-    timestamp: new Date(Date.now() - 3600000 * 2).toISOString(),
-    targetUserId: 'az-usr-1001',
-    targetUserName: 'Sarah Jenkins',
-    targetUserEmail: 'sjenkins@contoso.com',
-    actionType: 'APPROVE',
-    assignedRole: 'APPSEC_ADMIN',
-    approvedBy: 'AppSec Governance Admin',
-    approverRole: 'SUPER_ADMIN',
-    requestSource: 'AZURE_AD_SCIM',
-    rationaleNotes: 'Verified Entra ID Security Group claim (AppSec-Engineers) and background clearance. Approved for AppSec Admin access.',
-    complianceTag: 'SOC2-CC6.1-ACCESS-AUTHORIZATION',
-    verificationHash: 'sig_a9f81e33b00c9921e4d882190',
-    status: 'APPROVED'
-  },
-  {
-    id: 'APR-2026-8790',
-    timestamp: new Date(Date.now() - 3600000 * 18).toISOString(),
-    targetUserId: 'az-usr-1004',
-    targetUserName: 'Alex Rivera',
-    targetUserEmail: 'arivera@contoso.com',
-    actionType: 'APPROVE',
-    assignedRole: 'IT_VIEWER',
-    approvedBy: 'AppSec Governance Admin',
-    approverRole: 'APPSEC_ADMIN',
-    requestSource: 'OIDC_SSO',
-    rationaleNotes: 'Compliance auditor role granted for Q3 SOC2 audit cycle. Read-only application inventory access enabled.',
-    complianceTag: 'ISO27001-A.9.2.2-USER-PROVISIONING',
-    verificationHash: 'sig_7721b002c91833e4f901233',
-    status: 'APPROVED'
-  },
-  {
-    id: 'APR-2026-8650',
-    timestamp: new Date(Date.now() - 3600000 * 42).toISOString(),
-    targetUserId: 'az-usr-1005',
-    targetUserName: 'Mark Ross',
-    targetUserEmail: 'mross@contoso.com',
-    actionType: 'REJECT',
-    assignedRole: 'APPSEC_ADMIN',
-    approvedBy: 'AppSec Governance Admin',
-    approverRole: 'SUPER_ADMIN',
-    requestSource: 'AZURE_AD_SCIM',
-    rationaleNotes: 'Access request rejected due to missing 2FA enrollment on Azure AD tenant and unverified manager approval.',
-    complianceTag: 'NIST-800-53-AC-2',
-    verificationHash: 'sig_338e9104b92110c7a109844',
-    status: 'REJECTED'
-  },
-  {
-    id: 'APR-2026-8510',
-    timestamp: new Date(Date.now() - 3600000 * 96).toISOString(),
-    targetUserId: 'az-usr-1002',
-    targetUserName: 'David Chen',
-    targetUserEmail: 'dchen@contoso.com',
-    actionType: 'ROLE_CHANGE',
-    previousRole: 'IT_VIEWER',
-    assignedRole: 'APPSEC_ADMIN',
-    approvedBy: 'AppSec Governance Admin',
-    approverRole: 'SUPER_ADMIN',
-    requestSource: 'DIRECTORY_ADMIN',
-    rationaleNotes: 'Promoted from IT Viewer to AppSec Admin following transition to Lead Cloud Security Engineer position.',
-    complianceTag: 'SOC2-CC6.2-ROLE-ELEVATION',
-    verificationHash: 'sig_b882e901a5e3012ff871029',
-    status: 'MODIFIED'
-  },
-  {
-    id: 'APR-2026-8420',
-    timestamp: new Date(Date.now() - 3600000 * 120).toISOString(),
-    targetUserId: 'az-usr-1006',
-    targetUserName: 'Marcus Vance',
-    targetUserEmail: 'mvance@contoso.com',
-    actionType: 'SUSPEND',
-    assignedRole: 'IT_VIEWER',
-    approvedBy: 'System Security Engine',
-    approverRole: 'SYSTEM_BOT',
-    requestSource: 'AZURE_AD_SCIM',
-    rationaleNotes: 'Account access automatically suspended following SCIM 2.0 active=false assertion from Entra ID identity provider.',
-    complianceTag: 'HIPAA-164.312-TERMINATION',
-    verificationHash: 'sig_f221e900a3120bc8e912445',
-    status: 'SUSPENDED'
-  }
-];
+export const INITIAL_ACCESS_APPROVAL_RECORDS: AccessApprovalRecord[] = [];
 
 export function loadAccessApprovalRecords(): AccessApprovalRecord[] {
   if (typeof window === 'undefined') return INITIAL_ACCESS_APPROVAL_RECORDS;
@@ -818,7 +574,8 @@ export const ALL_PERMISSIONS: { key: PermissionKey; label: string; description: 
   { key: 'USER_MANAGE', label: 'User Directory Management', description: 'Approve, activate, edit, and suspend users', category: 'Identity & Access' },
   { key: 'RBAC_MANAGE', label: 'Manage RBAC Roles & Mappings', description: 'Create and modify custom roles, permissions, and group mappings', category: 'Identity & Access' },
   { key: 'SSO_SCIM_MANAGE', label: 'SSO & SCIM Configuration', description: 'Modify Azure AD, OIDC, and SCIM endpoint settings', category: 'Identity & Access' },
-  { key: 'AUDIT_LOG_VIEW', label: 'Inspect Audit Logs', description: 'View system audit trails and SCIM API logs', category: 'Compliance Audit' }
+  { key: 'AUDIT_LOG_VIEW', label: 'Inspect Audit Logs', description: 'View system audit trails and SCIM API logs', category: 'Compliance Audit' },
+  { key: 'ACCESS_LOG_VIEW', label: 'View Access Logs', description: 'Access and inspect user authentication and session access logs', category: 'Identity & Access' }
 ];
 
 export const DEFAULT_CUSTOM_ROLES: CustomRoleDefinition[] = [
@@ -832,7 +589,7 @@ export const DEFAULT_CUSTOM_ROLES: CustomRoleDefinition[] = [
       'APP_VIEW', 'APP_CREATE', 'APP_EDIT', 'APP_DELETE',
       'ASSESSMENT_SUBMIT', 'ASSESSMENT_APPROVE', 'SOP_UPLOAD',
       'EVIDENCE_GENERATE', 'PROMOTION_GATE_OVERRIDE',
-      'USER_MANAGE', 'RBAC_MANAGE', 'SSO_SCIM_MANAGE', 'AUDIT_LOG_VIEW'
+      'USER_MANAGE', 'RBAC_MANAGE', 'SSO_SCIM_MANAGE', 'AUDIT_LOG_VIEW', 'ACCESS_LOG_VIEW'
     ],
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
@@ -848,7 +605,7 @@ export const DEFAULT_CUSTOM_ROLES: CustomRoleDefinition[] = [
       'APP_VIEW', 'APP_CREATE', 'APP_EDIT', 'APP_DELETE',
       'ASSESSMENT_SUBMIT', 'ASSESSMENT_APPROVE', 'SOP_UPLOAD',
       'EVIDENCE_GENERATE', 'PROMOTION_GATE_OVERRIDE',
-      'USER_MANAGE', 'RBAC_MANAGE', 'SSO_SCIM_MANAGE', 'AUDIT_LOG_VIEW'
+      'USER_MANAGE', 'RBAC_MANAGE', 'SSO_SCIM_MANAGE', 'AUDIT_LOG_VIEW', 'ACCESS_LOG_VIEW'
     ],
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
@@ -871,7 +628,7 @@ export const DEFAULT_CUSTOM_ROLES: CustomRoleDefinition[] = [
     name: 'Security & Compliance Auditor',
     description: 'Dedicated auditor role with access to evidence reports, SOP documents, and compliance logs.',
     isSystemRole: false,
-    permissions: ['APP_VIEW', 'EVIDENCE_GENERATE', 'AUDIT_LOG_VIEW'],
+    permissions: ['APP_VIEW', 'EVIDENCE_GENERATE', 'AUDIT_LOG_VIEW', 'ACCESS_LOG_VIEW'],
     createdAt: '2026-02-01T00:00:00.000Z',
     updatedAt: '2026-02-01T00:00:00.000Z',
     createdBy: 'AppSec Governance Admin'
@@ -910,10 +667,20 @@ export function getEffectivePermissionsForRole(
       'APP_VIEW', 'APP_CREATE', 'APP_EDIT', 'APP_DELETE',
       'ASSESSMENT_SUBMIT', 'ASSESSMENT_APPROVE', 'SOP_UPLOAD',
       'EVIDENCE_GENERATE', 'PROMOTION_GATE_OVERRIDE',
-      'USER_MANAGE', 'RBAC_MANAGE', 'SSO_SCIM_MANAGE', 'AUDIT_LOG_VIEW'
+      'USER_MANAGE', 'RBAC_MANAGE', 'SSO_SCIM_MANAGE', 'AUDIT_LOG_VIEW', 'ACCESS_LOG_VIEW'
     ];
   }
-  return ['APP_VIEW', 'ASSESSMENT_SUBMIT', 'AUDIT_LOG_VIEW'];
+  return ['APP_VIEW', 'ASSESSMENT_SUBMIT', 'AUDIT_LOG_VIEW', 'ACCESS_LOG_VIEW'];
+}
+
+export function hasPermission(
+  roleKey: string,
+  requiredPerm: PermissionKey,
+  rolesList?: CustomRoleDefinition[]
+): boolean {
+  if (roleKey === 'SUPER_ADMIN') return true;
+  const permissions = getEffectivePermissionsForRole(roleKey, rolesList);
+  return permissions.includes(requiredPerm);
 }
 
 function base64UrlEncode(str: string): string {

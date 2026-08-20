@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Users,
   Search,
@@ -31,7 +31,9 @@ import {
   Clock,
   ShieldAlert,
   KeyRound,
-  RotateCcw
+  RotateCcw,
+  Settings,
+  FileText
 } from 'lucide-react';
 import {
   ProvisionedUser,
@@ -39,7 +41,12 @@ import {
   ActiveSsoUser,
   AccessApprovalRecord,
   AccessApprovalActionType,
-  CustomRoleDefinition
+  CustomRoleDefinition,
+  SsoConfig,
+  ScimConfig,
+  ScimGroupMapping,
+  ManualUserRoleMapping,
+  ScimAuditLog
 } from '../types';
 import {
   saveProvisionedUsers,
@@ -52,8 +59,24 @@ import {
   loadCustomRoles,
   getEffectivePermissionsForRole,
   loadManualUserMappings,
-  saveManualUserMappings
+  saveManualUserMappings,
+  loadSsoConfig,
+  saveSsoConfig,
+  loadScimConfig,
+  saveScimConfig,
+  loadGroupMappings,
+  saveGroupMappings,
+  loadScimAuditLogs
 } from '../utils/ssoScimStorage';
+import { SsoScimView } from './SsoScimView';
+
+export type UserManagementSubTab =
+  | 'USER_DIRECTORY'
+  | 'AZURE_SSO'
+  | 'GROUP_MAPPINGS'
+  | 'AUDIT_LOGS'
+  | 'APPROVAL_AUDITS'
+  | 'SCIM_LOGS';
 
 interface UserManagementViewProps {
   provisionedUsers: ProvisionedUser[];
@@ -61,6 +84,18 @@ interface UserManagementViewProps {
   onRefreshLogs: () => void;
   currentRole: UserRole;
   activeSsoUser?: ActiveSsoUser;
+  initialSubTab?: UserManagementSubTab;
+  ssoConfig?: SsoConfig;
+  onUpdateSsoConfig?: (config: SsoConfig) => void;
+  scimConfig?: ScimConfig;
+  onUpdateScimConfig?: (config: ScimConfig) => void;
+  groupMappings?: ScimGroupMapping[];
+  onUpdateGroupMappings?: (mappings: ScimGroupMapping[]) => void;
+  manualMappings?: ManualUserRoleMapping[];
+  onUpdateManualMappings?: (mappings: ManualUserRoleMapping[]) => void;
+  scimLogs?: ScimAuditLog[];
+  onOpenAzureLogin?: () => void;
+  onRoleChange?: (role: UserRole) => void;
 }
 
 export const UserManagementView: React.FC<UserManagementViewProps> = ({
@@ -68,10 +103,78 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   onUpdateUsers,
   onRefreshLogs,
   currentRole,
-  activeSsoUser
+  activeSsoUser,
+  initialSubTab,
+  ssoConfig,
+  onUpdateSsoConfig,
+  scimConfig,
+  onUpdateScimConfig,
+  groupMappings,
+  onUpdateGroupMappings,
+  manualMappings,
+  onUpdateManualMappings,
+  scimLogs,
+  onOpenAzureLogin,
+  onRoleChange
 }) => {
   // Navigation Tab State
-  const [activeTab, setActiveTab] = useState<'USER_DIRECTORY' | 'APPROVAL_AUDITS'>('USER_DIRECTORY');
+  const [activeTab, setActiveTab] = useState<UserManagementSubTab>(() => {
+    if (initialSubTab === 'SCIM_LOGS' || initialSubTab === 'APPROVAL_AUDITS') {
+      return 'AUDIT_LOGS';
+    }
+    return initialSubTab || 'USER_DIRECTORY';
+  });
+
+  const [logsViewMode, setLogsViewMode] = useState<'APPROVAL_RECORDS' | 'SCIM_PROVISIONING'>(() => {
+    if (initialSubTab === 'SCIM_LOGS') return 'SCIM_PROVISIONING';
+    return 'APPROVAL_RECORDS';
+  });
+
+  const [scimSearchTerm, setScimSearchTerm] = useState('');
+  const [scimMethodFilter, setScimMethodFilter] = useState<string>('ALL');
+  const [inspectingScimLog, setInspectingScimLog] = useState<ScimAuditLog | null>(null);
+
+  useEffect(() => {
+    if (initialSubTab) {
+      if (initialSubTab === 'SCIM_LOGS') {
+        setActiveTab('AUDIT_LOGS');
+        setLogsViewMode('SCIM_PROVISIONING');
+      } else if (initialSubTab === 'APPROVAL_AUDITS') {
+        setActiveTab('AUDIT_LOGS');
+        setLogsViewMode('APPROVAL_RECORDS');
+      } else {
+        setActiveTab(initialSubTab);
+      }
+    }
+  }, [initialSubTab]);
+
+  // Fallback state for SSO/SCIM items if not directly provided
+  const [internalSsoConfig, setInternalSsoConfig] = useState<SsoConfig>(() => ssoConfig || loadSsoConfig());
+  const [internalScimConfig, setInternalScimConfig] = useState<ScimConfig>(() => scimConfig || loadScimConfig());
+  const [internalGroupMappings, setInternalGroupMappings] = useState<ScimGroupMapping[]>(() => groupMappings || loadGroupMappings());
+  const [internalManualMappings, setInternalManualMappings] = useState<ManualUserRoleMapping[]>(() => manualMappings || loadManualUserMappings());
+  const [internalScimLogs, setInternalScimLogs] = useState<ScimAuditLog[]>(() => scimLogs || loadScimAuditLogs());
+
+  // Keep internal state updated if props change
+  useEffect(() => {
+    if (ssoConfig) setInternalSsoConfig(ssoConfig);
+  }, [ssoConfig]);
+
+  useEffect(() => {
+    if (scimConfig) setInternalScimConfig(scimConfig);
+  }, [scimConfig]);
+
+  useEffect(() => {
+    if (groupMappings) setInternalGroupMappings(groupMappings);
+  }, [groupMappings]);
+
+  useEffect(() => {
+    if (manualMappings) setInternalManualMappings(manualMappings);
+  }, [manualMappings]);
+
+  useEffect(() => {
+    if (scimLogs) setInternalScimLogs(scimLogs);
+  }, [scimLogs]);
 
   // User Directory State & Filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -687,11 +790,32 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
     return matchesSearch && matchesStatus;
   });
 
-  // KPI Metrics for Access Approval Records
+  // Filter SCIM 2.0 Audit Logs for Unified Logs View
+  const allScimLogs = scimLogs || internalScimLogs;
+  const filteredScimLogs = allScimLogs.filter((log) => {
+    const term = scimSearchTerm.toLowerCase();
+    const matchesSearch =
+      !term ||
+      log.endpoint.toLowerCase().includes(term) ||
+      log.action.toLowerCase().includes(term) ||
+      log.details.toLowerCase().includes(term) ||
+      String(log.statusCode).includes(term) ||
+      (log.targetUser && log.targetUser.toLowerCase().includes(term));
+
+    const matchesMethod =
+      scimMethodFilter === 'ALL' || log.method.toUpperCase() === scimMethodFilter.toUpperCase();
+
+    return matchesSearch && matchesMethod;
+  });
+
+  // KPI Metrics for Access Approval Records & SCIM Logs
   const totalApprovalCount = approvalRecords.length;
   const approvedCount = approvalRecords.filter((r) => r.status === 'APPROVED').length;
   const rejectedCount = approvalRecords.filter((r) => r.status === 'REJECTED').length;
   const modifiedCount = approvalRecords.filter((r) => r.status === 'MODIFIED' || r.status === 'SUSPENDED').length;
+
+  const totalScimCount = allScimLogs.length;
+  const scimSuccessCount = allScimLogs.filter((l) => l.statusCode >= 200 && l.statusCode < 300).length;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 animate-fadeIn">
@@ -715,45 +839,80 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
       )}
 
       {/* Navigation Sub-Tab Selector */}
-      <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2">
-        <div className="flex items-center gap-2">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-3 shadow-xs">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => setActiveTab('USER_DIRECTORY')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+            className={`px-3.5 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
               activeTab === 'USER_DIRECTORY'
-                ? 'bg-indigo-600 text-white shadow-md'
-                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
             }`}
           >
-            <Users className="w-4 h-4" />
-            <span>User Identity Directory</span>
-            <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px]">
+            <Users className="w-4 h-4 shrink-0" />
+            <span>User Directory</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+              activeTab === 'USER_DIRECTORY' ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+            }`}>
               {totalUsers}
             </span>
             {pendingCount > 0 && (
-              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping ml-1" title="Pending approval requests" />
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping ml-0.5" title="Pending approval requests" />
             )}
           </button>
 
           <button
-            onClick={() => setActiveTab('APPROVAL_AUDITS')}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
-              activeTab === 'APPROVAL_AUDITS'
-                ? 'bg-indigo-600 text-white shadow-md'
-                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+            onClick={() => setActiveTab('GROUP_MAPPINGS')}
+            className={`px-3.5 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+              activeTab === 'GROUP_MAPPINGS'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
             }`}
           >
-            <ClipboardList className="w-4 h-4" />
-            <span>Auditable Approval Records</span>
-            <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 text-[10px] font-mono">
-              {totalApprovalCount} Logs
+            <Shield className="w-4 h-4 shrink-0 text-purple-500" />
+            <span>Mappings</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+              activeTab === 'GROUP_MAPPINGS' ? 'bg-white/20 text-white' : 'bg-purple-100 dark:bg-purple-950 text-purple-800 dark:text-purple-300 border border-purple-500/30'
+            }`}>
+              {(groupMappings || internalGroupMappings).length} Rules
             </span>
           </button>
-        </div>
 
-        <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 font-medium">
-          <Fingerprint className="w-3.5 h-3.5 text-emerald-500" />
-          <span>SOC2 Type II & ISO27001 Access Management Ledger</span>
+          <button
+            onClick={() => setActiveTab('AZURE_SSO')}
+            className={`px-3.5 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+              activeTab === 'AZURE_SSO'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+            }`}
+          >
+            <Settings className="w-4 h-4 shrink-0 text-blue-500" />
+            <span>Single Sign On (SSO)</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+              activeTab === 'AZURE_SSO' ? 'bg-white/20 text-white' : 'bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300 border border-blue-500/30'
+            }`}>
+              OIDC
+            </span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('AUDIT_LOGS')}
+            className={`px-3.5 py-2 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+              activeTab === 'AUDIT_LOGS' || activeTab === 'APPROVAL_AUDITS' || activeTab === 'SCIM_LOGS'
+                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+            }`}
+          >
+            <ClipboardList className="w-4 h-4 shrink-0 text-emerald-500" />
+            <span>Approval Records & SCIM Logs</span>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+              activeTab === 'AUDIT_LOGS' || activeTab === 'APPROVAL_AUDITS' || activeTab === 'SCIM_LOGS'
+                ? 'bg-white/20 text-white'
+                : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-500/30'
+            }`}>
+              {totalApprovalCount + totalScimCount} Logs
+            </span>
+          </button>
         </div>
       </div>
 
@@ -1194,8 +1353,8 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
         </div>
       )}
 
-      {/* VIEW TAB 2: AUDITABLE APPROVAL RECORDS */}
-      {activeTab === 'APPROVAL_AUDITS' && (
+      {/* VIEW TAB 2 & 6 MERGED: GOVERNANCE AUDIT LEDGER & SCIM PROVISIONING LOGS */}
+      {(activeTab === 'AUDIT_LOGS' || activeTab === 'APPROVAL_AUDITS' || activeTab === 'SCIM_LOGS') && (
         <div className="space-y-8 animate-fadeIn">
           {/* Header Banner */}
           <div className="bg-gradient-to-br from-slate-900 via-purple-950 to-slate-900 rounded-2xl p-6 md:p-8 border border-slate-800 shadow-xl text-white">
@@ -1206,38 +1365,97 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                     <ClipboardList className="w-6 h-6" />
                   </div>
                   <div>
-                    <h2 className="text-2xl font-bold tracking-tight text-slate-100 flex items-center gap-2">
-                      <span>Auditable Access Management Approval Records</span>
+                    <h2 className="text-2xl font-bold tracking-tight text-slate-100 flex items-center gap-2 flex-wrap">
+                      <span>Governance Audit Ledger & SCIM Provisioning Logs</span>
                       <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-extrabold uppercase">
-                        SOC2 & ISO27001
+                        SOC2, ISO27001 & RFC 7644
                       </span>
                     </h2>
                     <p className="text-sm text-purple-200/80">
-                      Tamper-evident audit ledger tracking administrator access sign-offs, role modifications, and Azure AD approval gate decisions
+                      Tamper-evident audit ledger tracking administrator access sign-offs, role modifications, and Azure Entra ID SCIM 2.0 provisioning events
                     </p>
                   </div>
                 </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
-                <button
-                  onClick={() => setIsAddApprovalModalOpen(true)}
-                  className="px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs shadow-lg flex items-center gap-2 transition-all cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Record Approval Entry</span>
-                </button>
+                {logsViewMode === 'APPROVAL_RECORDS' ? (
+                  <>
+                    <button
+                      onClick={() => setIsAddApprovalModalOpen(true)}
+                      className="px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs shadow-lg flex items-center gap-2 transition-all cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Record Approval Entry</span>
+                    </button>
 
-                <button
-                  onClick={() => exportAccessApprovalRecordsCSV(filteredApprovalRecords)}
-                  className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs shadow-md flex items-center gap-2 transition-all cursor-pointer"
-                >
-                  <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-                  <span>Export Auditable CSV</span>
-                </button>
+                    <button
+                      onClick={() => exportAccessApprovalRecordsCSV(filteredApprovalRecords)}
+                      className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs shadow-md flex items-center gap-2 transition-all cursor-pointer"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                      <span>Export Auditable CSV</span>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => {
+                      onRefreshLogs();
+                      setInternalScimLogs(loadScimAuditLogs());
+                      showToast('SCIM Provisioning Logs refreshed successfully.');
+                    }}
+                    className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-lg flex items-center gap-2 transition-all cursor-pointer"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                    <span>Refresh SCIM Logs</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>
+
+          {/* Sub-View Switcher Pill Bar */}
+          <div className="flex items-center gap-2 p-1.5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs w-fit">
+            <button
+              type="button"
+              onClick={() => setLogsViewMode('APPROVAL_RECORDS')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                logsViewMode === 'APPROVAL_RECORDS'
+                  ? 'bg-purple-600 text-white shadow-md shadow-purple-600/20'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <Fingerprint className="w-4 h-4" />
+              <span>Approval Records (SOC2 / ISO27001)</span>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+                logsViewMode === 'APPROVAL_RECORDS' ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+              }`}>
+                {totalApprovalCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setLogsViewMode('SCIM_PROVISIONING')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                logsViewMode === 'SCIM_PROVISIONING'
+                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <FileText className="w-4 h-4" />
+              <span>SCIM Provisioning Logs (Azure Entra ID)</span>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+                logsViewMode === 'SCIM_PROVISIONING' ? 'bg-white/20 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
+              }`}>
+                {totalScimCount}
+              </span>
+            </button>
+          </div>
+
+          {/* VIEW MODE 1: AUDITABLE APPROVAL RECORDS */}
+          {logsViewMode === 'APPROVAL_RECORDS' && (
+            <div className="space-y-8 animate-fadeIn">
 
           {/* KPI Cards for Approval Audit Ledger */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1441,6 +1659,227 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
               </table>
             </div>
           </div>
+        </div>
+      )}
+
+          {/* VIEW MODE 2: SCIM 2.0 PROVISIONING LOGS */}
+          {logsViewMode === 'SCIM_PROVISIONING' && (
+            <div className="space-y-8 animate-fadeIn">
+              {/* KPI Cards for SCIM Provisioning Logs */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Total SCIM Events</p>
+                    <p className="text-2xl font-bold text-slate-900 dark:text-white mt-1">{totalScimCount}</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Azure Entra ID Sync Calls</p>
+                  </div>
+                  <div className="p-3 bg-emerald-50 dark:bg-emerald-950/60 rounded-xl text-emerald-600 dark:text-emerald-400">
+                    <FileText className="w-6 h-6" />
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Success Rate</p>
+                    <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                      {totalScimCount > 0 ? `${Math.round((scimSuccessCount / totalScimCount) * 100)}%` : '100%'}
+                    </p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">HTTP 200 / 201 Responses</p>
+                  </div>
+                  <div className="p-3 bg-emerald-50 dark:bg-emerald-950/60 rounded-xl text-emerald-600 dark:text-emerald-400">
+                    <CheckCircle2 className="w-6 h-6" />
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Standard Protocol</p>
+                    <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400 mt-1">RFC 7644</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">SCIM 2.0 REST Ingress</p>
+                  </div>
+                  <div className="p-3 bg-indigo-50 dark:bg-indigo-950/60 rounded-xl text-indigo-600 dark:text-indigo-400">
+                    <Code className="w-6 h-6" />
+                  </div>
+                </div>
+
+                <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Synced Directory</p>
+                    <p className="text-2xl font-bold text-purple-600 dark:text-purple-400 mt-1">{provisionedUsers.length}</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Active Provisioned Identities</p>
+                  </div>
+                  <div className="p-3 bg-purple-50 dark:bg-purple-950/60 rounded-xl text-purple-600 dark:text-purple-400">
+                    <Users className="w-6 h-6" />
+                  </div>
+                </div>
+              </div>
+
+              {/* SCIM Filter and Search Bar */}
+              <div className="p-4 sm:p-6 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="relative w-full sm:w-96">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={scimSearchTerm}
+                    onChange={(e) => setScimSearchTerm(e.target.value)}
+                    placeholder="Search SCIM logs by action, endpoint, user, details..."
+                    className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  {scimSearchTerm && (
+                    <button
+                      onClick={() => setScimSearchTerm('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-3 w-full sm:w-auto">
+                  <div className="flex items-center gap-1.5">
+                    <Filter className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="text-xs text-slate-500 font-medium">Method Filter:</span>
+                    <select
+                      value={scimMethodFilter}
+                      onChange={(e) => setScimMethodFilter(e.target.value)}
+                      className="bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:outline-none"
+                    >
+                      <option value="ALL">All HTTP Methods</option>
+                      <option value="GET">GET Requests</option>
+                      <option value="POST">POST (Create / Provision)</option>
+                      <option value="PATCH">PATCH (Update / Role Sync)</option>
+                      <option value="PUT">PUT (Replace)</option>
+                      <option value="DELETE">DELETE (Deprovision)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* SCIM Logs Table */}
+              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                        <th className="py-3.5 px-4">Timestamp & Protocol</th>
+                        <th className="py-3.5 px-4">HTTP Method & Path</th>
+                        <th className="py-3.5 px-4">Status Code</th>
+                        <th className="py-3.5 px-4">SCIM Action Category</th>
+                        <th className="py-3.5 px-4">Target Identity & Details</th>
+                        <th className="py-3.5 px-4 text-right">Inspect Payload</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800 text-xs">
+                      {filteredScimLogs.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="py-12 text-center text-slate-400">
+                            <div className="flex flex-col items-center justify-center space-y-2">
+                              <FileText className="w-8 h-8 opacity-40" />
+                              <p className="text-sm font-semibold">No SCIM provisioning logs match criteria.</p>
+                              <p className="text-xs text-slate-500">
+                                SCIM events from Azure AD synchronization are recorded here automatically.
+                              </p>
+                            </div>
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredScimLogs.map((log) => {
+                          const methodColor =
+                            log.method === 'POST'
+                              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+                              : log.method === 'PATCH'
+                              ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                              : log.method === 'DELETE'
+                              ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30'
+                              : log.method === 'PUT'
+                              ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/30'
+                              : 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30';
+
+                          const statusBadgeColor =
+                            log.statusCode >= 200 && log.statusCode < 300
+                              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+                              : log.statusCode >= 400 && log.statusCode < 500
+                              ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30'
+                              : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/30';
+
+                          return (
+                            <tr key={log.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition-colors">
+                              {/* Timestamp */}
+                              <td className="py-3.5 px-4">
+                                <div className="space-y-0.5">
+                                  <div className="flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-300 font-mono font-bold">
+                                    <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                    <span>{new Date(log.timestamp).toLocaleTimeString()}</span>
+                                  </div>
+                                  <p className="text-[10px] text-slate-400 font-mono">
+                                    {new Date(log.timestamp).toLocaleDateString()}
+                                  </p>
+                                </div>
+                              </td>
+
+                              {/* HTTP Method & Path */}
+                              <td className="py-3.5 px-4">
+                                <div className="flex items-center gap-2">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-extrabold border uppercase ${methodColor}`}>
+                                    {log.method}
+                                  </span>
+                                  <span className="font-mono text-xs text-slate-700 dark:text-slate-300">
+                                    {log.endpoint}
+                                  </span>
+                                </div>
+                              </td>
+
+                              {/* Status Code */}
+                              <td className="py-3.5 px-4">
+                                <span className={`px-2 py-0.5 rounded text-xs font-mono font-bold border ${statusBadgeColor}`}>
+                                  {log.statusCode}
+                                </span>
+                              </td>
+
+                              {/* Action */}
+                              <td className="py-3.5 px-4">
+                                <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-mono text-[11px] font-semibold">
+                                  {log.action}
+                                </span>
+                              </td>
+
+                              {/* Details & Target */}
+                              <td className="py-3.5 px-4 max-w-sm">
+                                <div className="space-y-0.5">
+                                  {log.targetUser && (
+                                    <p className="font-bold text-xs text-slate-900 dark:text-slate-100 flex items-center gap-1">
+                                      <Users className="w-3 h-3 text-indigo-400 shrink-0" />
+                                      <span>{log.targetUser}</span>
+                                    </p>
+                                  )}
+                                  <p className="text-xs text-slate-600 dark:text-slate-300 line-clamp-2">
+                                    {log.details}
+                                  </p>
+                                </div>
+                              </td>
+
+                              {/* Inspect Payload Button */}
+                              <td className="py-3.5 px-4 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => setInspectingScimLog(log)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-emerald-100 dark:hover:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-bold text-[11px] border border-slate-200 dark:border-slate-700 transition-all flex items-center gap-1 ml-auto cursor-pointer"
+                                  title="Inspect full SCIM event payload and schema breakdown"
+                                >
+                                  <Code className="w-3.5 h-3.5 text-emerald-500" />
+                                  <span>Inspect</span>
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1923,6 +2362,173 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
             </div>
 
           </div>
+        </div>
+      )}
+
+      {/* MODAL 5: Inspect SCIM Provisioning Log Payload */}
+      {inspectingScimLog && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-6 text-white animate-scaleIn max-h-[90vh] overflow-y-auto">
+            
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-emerald-950 text-emerald-400 border border-emerald-500/30 rounded-xl">
+                  <Code className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-100 flex items-center gap-2">
+                    <span>SCIM 2.0 Ingress Event Payload</span>
+                    <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-mono border border-emerald-500/40">
+                      RFC 7644
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-400 font-mono">
+                    Log ID: {inspectingScimLog.id}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectingScimLog(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                <span className="text-[10px] text-slate-500 uppercase font-semibold">Action & Endpoint</span>
+                <p className="font-bold text-slate-200">{inspectingScimLog.action}</p>
+                <p className="font-mono text-emerald-400 text-[11px]">{inspectingScimLog.method} {inspectingScimLog.endpoint}</p>
+              </div>
+
+              <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-1">
+                <span className="text-[10px] text-slate-500 uppercase font-semibold">Status & Timestamp</span>
+                <p className="font-bold text-slate-200">HTTP {inspectingScimLog.statusCode}</p>
+                <p className="font-mono text-slate-400 text-[11px]">{new Date(inspectingScimLog.timestamp).toLocaleString()}</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+              <span className="text-[10px] text-slate-500 uppercase font-semibold block">Event Details</span>
+              <p className="text-xs text-slate-200 leading-relaxed font-mono">
+                {inspectingScimLog.details}
+              </p>
+            </div>
+
+            {inspectingScimLog.payload && (
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+                <span className="text-[10px] text-slate-500 uppercase font-semibold block">Parsed SCIM Request / Response Payload</span>
+                <pre className="text-[11px] font-mono text-emerald-300 bg-slate-900 p-3 rounded-lg overflow-x-auto max-h-60">
+                  {typeof inspectingScimLog.payload === 'object'
+                    ? JSON.stringify(inspectingScimLog.payload, null, 2)
+                    : inspectingScimLog.payload}
+                </pre>
+              </div>
+            )}
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setInspectingScimLog(null)}
+                className="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl font-semibold text-xs cursor-pointer"
+              >
+                Close Payload Inspector
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* VIEW TAB 3: AZURE AD SSO CONFIGURATION & GUIDE */}
+      {activeTab === 'AZURE_SSO' && (
+        <div className="animate-fadeIn">
+          <SsoScimView
+            initialSubTab="azure-config"
+            hideTabsBar={true}
+            hideHeaderBanner={false}
+            ssoConfig={ssoConfig || internalSsoConfig}
+            onUpdateSsoConfig={(cfg) => {
+              setInternalSsoConfig(cfg);
+              saveSsoConfig(cfg);
+              onUpdateSsoConfig?.(cfg);
+            }}
+            scimConfig={scimConfig || internalScimConfig}
+            onUpdateScimConfig={(cfg) => {
+              setInternalScimConfig(cfg);
+              saveScimConfig(cfg);
+              onUpdateScimConfig?.(cfg);
+            }}
+            groupMappings={groupMappings || internalGroupMappings}
+            onUpdateGroupMappings={(mappings) => {
+              setInternalGroupMappings(mappings);
+              saveGroupMappings(mappings);
+              onUpdateGroupMappings?.(mappings);
+            }}
+            manualMappings={manualMappings || internalManualMappings}
+            onUpdateManualMappings={(mappings) => {
+              setInternalManualMappings(mappings);
+              saveManualUserMappings(mappings);
+              onUpdateManualMappings?.(mappings);
+            }}
+            provisionedUsers={provisionedUsers}
+            onUpdateUsers={onUpdateUsers}
+            scimLogs={scimLogs || internalScimLogs}
+            onRefreshLogs={() => {
+              onRefreshLogs();
+              setInternalScimLogs(loadScimAuditLogs());
+            }}
+            activeSsoUser={activeSsoUser}
+            onOpenAzureLogin={onOpenAzureLogin}
+            onRoleChange={onRoleChange}
+          />
+        </div>
+      )}
+
+      {/* VIEW TAB 4: GROUP-TO-ROLE MAPPINGS */}
+      {activeTab === 'GROUP_MAPPINGS' && (
+        <div className="animate-fadeIn">
+          <SsoScimView
+            initialSubTab="mappings"
+            hideTabsBar={true}
+            hideHeaderBanner={false}
+            ssoConfig={ssoConfig || internalSsoConfig}
+            onUpdateSsoConfig={(cfg) => {
+              setInternalSsoConfig(cfg);
+              saveSsoConfig(cfg);
+              onUpdateSsoConfig?.(cfg);
+            }}
+            scimConfig={scimConfig || internalScimConfig}
+            onUpdateScimConfig={(cfg) => {
+              setInternalScimConfig(cfg);
+              saveScimConfig(cfg);
+              onUpdateScimConfig?.(cfg);
+            }}
+            groupMappings={groupMappings || internalGroupMappings}
+            onUpdateGroupMappings={(mappings) => {
+              setInternalGroupMappings(mappings);
+              saveGroupMappings(mappings);
+              onUpdateGroupMappings?.(mappings);
+            }}
+            manualMappings={manualMappings || internalManualMappings}
+            onUpdateManualMappings={(mappings) => {
+              setInternalManualMappings(mappings);
+              saveManualUserMappings(mappings);
+              onUpdateManualMappings?.(mappings);
+            }}
+            provisionedUsers={provisionedUsers}
+            onUpdateUsers={onUpdateUsers}
+            scimLogs={scimLogs || internalScimLogs}
+            onRefreshLogs={() => {
+              onRefreshLogs();
+              setInternalScimLogs(loadScimAuditLogs());
+            }}
+            activeSsoUser={activeSsoUser}
+            onOpenAzureLogin={onOpenAzureLogin}
+            onRoleChange={onRoleChange}
+          />
         </div>
       )}
 

@@ -13,7 +13,23 @@ export type PermissionKey =
   | 'USER_MANAGE'
   | 'RBAC_MANAGE'
   | 'SSO_SCIM_MANAGE'
-  | 'AUDIT_LOG_VIEW';
+  | 'AUDIT_LOG_VIEW'
+  | 'ACCESS_LOG_VIEW';
+
+export interface AccessLogEntry {
+  id: string;
+  timestamp: string;
+  userEmail: string;
+  displayName: string;
+  role: string;
+  loginMethod?: string;
+  action: 'LOGIN_SUCCESS' | 'LOGIN_FAILED' | 'LOGOUT' | 'SESSION_TIMEOUT' | 'TAB_ACCESS' | 'AUTH_CHALLENGE' | 'PERMISSION_DENIED' | 'SESSION_EXTENDED' | 'ROLE_SWITCH' | string;
+  resource?: string;
+  ipAddress?: string;
+  userAgent?: string;
+  status: 'SUCCESS' | 'WARNING' | 'DENIED' | 'EXPIRED' | 'INFO';
+  details: string;
+}
 
 export interface CustomRoleDefinition {
   id: string;
@@ -195,7 +211,7 @@ export interface SsoConfig {
   clientSecret: string;
   redirectUri: string;
   scopes: string;
-  ssoMode: 'LIVE_OIDC' | 'SIMULATED_AZURE_OIDC';
+  ssoMode: 'LIVE_OIDC';
   enforceSso: boolean;
   loginUrl: string;
   tokenUrl?: string;
@@ -258,8 +274,10 @@ export interface ScimAuditLog {
   action: string;
   targetUserId?: string;
   targetUserName?: string;
+  targetUser?: string;
   details: string;
   payloadSummary?: string;
+  payload?: any;
 }
 
 export type AccessApprovalActionType =
@@ -466,5 +484,7 @@ export interface PromotionEvidence {
   revokedReason?: string;
   applicationId?: string; // Optional reference to registered Application ID in database
   applicationName?: string; // Optional reference to registered Application Name in database
+  reportType?: 'STATIC' | 'CONTAINER' | 'DYNAMIC';
+  reportCategory?: string; // e.g. "Static Scan Report", "Container Security Report", "Dynamic Scan Report"
 }
 

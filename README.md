@@ -14,17 +14,10 @@ A full-stack enterprise application security posture management (ASPM) and criti
   - System Stability & New Development (10.0% weight)
   - System Downtime Impact (10.0% weight)
 - **4-Tier Classification System**:
-<<<<<<< HEAD
   - **Tier 1 (Critical)**: Score ≥ 9.0 (Continuous automated AppSec testing & 24h critical patch SLA)
   - **Tier 2 (High)**: Score 6.0 – 8.9 (Bi-weekly security audit & 7-day critical patch SLA)
   - **Tier 3 (Medium)**: Score 3.0 – 5.9 (Bi-annual vulnerability assessment & 30-day patch SLA)
   - **Tier 4 (Low)**: Score < 3.0 (Annual automated vulnerability scan & 60-day patch SLA)
-=======
-  - **Tier 1 (Critical)**: Score ≥ 9.0 (24h RTO / 1h RPO)
-  - **Tier 2 (High)**: Score 6.0 – 8.9 (48h RTO / 4h RPO)
-  - **Tier 3 (Medium)**: Score 3.0 – 5.9 (72h RTO / 12h RPO)
-  - **Tier 4 (Low)**: Score < 3.0 (168h RTO / 24h RPO)
->>>>>>> refs/remotes/origin/feature
 - **Comprehensive Lifecycle Tracking**: Manage hosting environments, regulatory compliance mandates (PCI-DSS, SOC2, HIPAA, ISO27001), IT/AppSec owners, and third-party dependencies.
 - **Data Export & Backup**: Full database JSON backup/restore and CSV inventory export.
 
@@ -55,11 +48,7 @@ A full-stack enterprise application security posture management (ASPM) and criti
 ### 5. 🔐 Role-Based Access Control (RBAC) & Governance
 - **5 Built-in System Roles**:
   - `APPSEC_ADMIN`: Full administrative control over inventory, settings, SSO, and review queue.
-<<<<<<< HEAD
   - `IT_OPS_LEAD`: Operations management and infrastructure oversight.
-=======
-  - `IT_OPS_LEAD`: Operations management and RTO/RPO SLA oversight.
->>>>>>> refs/remotes/origin/feature
   - `APPLICATION_OWNER`: Self-assessment submissions and application management.
   - `COMPLIANCE_AUDITOR`: Read-only access to audit trails, SOPs, and promotion evidence certificates.
   - `READ_ONLY`: View-only dashboard access.
@@ -105,6 +94,40 @@ NODE_ENV=development
 AZURE_TENANT_ID=your_azure_tenant_id
 AZURE_CLIENT_ID=your_azure_client_id
 AZURE_CLIENT_SECRET=your_azure_client_secret
+```
+
+---
+
+## 🗄️ PostgreSQL Automated Backup & Restore (Docker + Cron)
+
+Automated backup and restore scripts for the PostgreSQL Docker container:
+
+### Manual Backup
+```bash
+chmod +x backup_postgres.sh
+./backup_postgres.sh
+```
+*Creates compressed `.sql.gz` dumps in the `./backups/` directory and purges backups older than the configured retention policy (default: 7 days).*
+
+### Cron Schedule Setup
+To schedule automated daily backups at 02:00 AM:
+```bash
+# Open crontab editor
+crontab -e
+
+# Add the following entry (adjust path as needed):
+0 2 * * * /bin/bash /path/to/backup_postgres.sh >> /path/to/backups/backup.log 2>&1
+```
+
+### Manual Restore
+```bash
+chmod +x restore_postgres.sh
+
+# Restore the most recent backup automatically:
+./restore_postgres.sh
+
+# Or restore a specific backup archive:
+./restore_postgres.sh ./backups/app_db_backup_20260818_020000.sql.gz
 ```
 
 ---

@@ -225,12 +225,29 @@ export async function createAndSavePromotionEvidence(
     isAdminOverride?: boolean;
     applicationId?: string;
     applicationName?: string;
+    reportType?: 'STATIC' | 'CONTAINER' | 'DYNAMIC';
+    reportCategory?: string;
   }
 ): Promise<PromotionEvidence> {
   const currentList = loadPromotionEvidences();
   const timestamp = new Date().toISOString();
   const randomSuffix = Math.floor(10000 + Math.random() * 90000);
   const evidenceId = `PROMO-EVID-${new Date().getFullYear()}-${randomSuffix}`;
+
+  // Determine reportType if not explicitly passed
+  let resolvedReportType: 'STATIC' | 'CONTAINER' | 'DYNAMIC' = params.reportType || 'STATIC';
+  if (!params.reportType) {
+    const hasContainer = params.snapshotFindings.some(f => (f.type || '').toLowerCase().includes('container') || (f.scanType || '').toLowerCase().includes('container')) || params.project.toLowerCase().includes('aqua') || params.repository.toLowerCase().includes('aqua') || params.repository.toLowerCase().includes('.tar') || params.repository.includes(':');
+    const hasDast = params.snapshotFindings.some(f => (f.type || '').toLowerCase().includes('dast') || (f.scanType || '').toLowerCase().includes('dast'));
+    if (hasContainer) resolvedReportType = 'CONTAINER';
+    else if (hasDast) resolvedReportType = 'DYNAMIC';
+  }
+
+  const resolvedCategory = params.reportCategory || (
+    resolvedReportType === 'CONTAINER' ? 'Container Security Report' :
+    resolvedReportType === 'DYNAMIC' ? 'Dynamic Scan Report' :
+    'Static Scan Report'
+  );
   
   const verificationHash = generateVerificationHash(
     params.project,
@@ -273,7 +290,9 @@ export async function createAndSavePromotionEvidence(
     signatureBadge: 'DIGITALLY_SIGNED_ARMORCODE_GATE_STAMP',
     status: 'ISSUED',
     applicationId: params.applicationId,
-    applicationName: params.applicationName
+    applicationName: params.applicationName,
+    reportType: resolvedReportType,
+    reportCategory: resolvedCategory
   };
 
   const updatedList = [newEvidence, ...currentList.filter(e => e.evidenceId !== evidenceId)];
@@ -339,6 +358,37 @@ export function revokePromotionEvidence(evidenceId: string, revokedBy: string, r
     evidenceId
   );
 
+  return updatedList;
+}
+
+/**
+ * Clear all Promotion Evidence Certificates from storage and backend
+ */
+export function clearAllPromotionEvidences(): void {
+  try {
+    localStorage.removeItem(PROMOTION_STORAGE_KEY);
+    fetch('/api/promotion-evidences', {
+      method: 'DELETE'
+    }).catch(err => console.warn('Clear backend promotion evidences warning:', err));
+  } catch (err) {
+    console.error('Failed to clear promotion evidences:', err);
+  }
+}
+
+/**
+ * Delete a single Promotion Evidence Certificate
+ */
+export function deletePromotionEvidence(evidenceId: string): PromotionEvidence[] {
+  const currentList = loadPromotionEvidences();
+  const updatedList = currentList.filter(item => item.evidenceId !== evidenceId);
+  try {
+    localStorage.setItem(PROMOTION_STORAGE_KEY, JSON.stringify(updatedList));
+    fetch(`/api/promotion-evidences/${evidenceId}`, {
+      method: 'DELETE'
+    }).catch(err => console.warn('Delete backend promotion evidence warning:', err));
+  } catch (err) {
+    console.error('Failed to delete promotion evidence from localStorage:', err);
+  }
   return updatedList;
 }
 

@@ -16,6 +16,8 @@ import {
   loadPromotionEvidences,
   asyncFetchPromotionEvidences,
   revokePromotionEvidence,
+  clearAllPromotionEvidences,
+  deletePromotionEvidence,
   downloadEvidenceJSON
 } from '../services/promotionEvidenceService';
 import { loadActiveSsoUser } from '../utils/ssoScimStorage';
@@ -53,17 +55,33 @@ import {
   History,
   Trash2,
   UserCheck,
-  ArrowRight
+  ArrowRight,
+  Zap,
+  Boxes,
+  Code,
+  Package,
+  Key,
+  AlertOctagon
 } from 'lucide-react';
+
+export type ScanReportType = 'STATIC' | 'CONTAINER' | 'DYNAMIC';
 
 interface SecurityReportsViewProps {
   applications?: Application[];
   initialSubTab?: 'QUERY' | 'EVIDENCES';
+  initialReportType?: ScanReportType;
+  onReportTypeChange?: (type: ScanReportType) => void;
 }
 
-export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applications = [], initialSubTab = 'QUERY' }) => {
-  // Navigation Sub-tab
+export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({
+  applications = [],
+  initialSubTab = 'QUERY',
+  initialReportType = 'STATIC',
+  onReportTypeChange
+}) => {
+  // Navigation Sub-tab & Scan Report Type
   const [activeSubTab, setActiveSubTab] = useState<'QUERY' | 'EVIDENCES'>(initialSubTab);
+  const [reportType, setReportType] = useState<ScanReportType>(initialReportType || 'STATIC');
 
   useEffect(() => {
     if (initialSubTab) {
@@ -71,17 +89,78 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
     }
   }, [initialSubTab]);
 
-  // Query Form State
-  const [projectName, setProjectName] = useState<string>(appSettings.ArmorCode?.DefaultProject || 'sample');
-  const [selectedRepositories, setSelectedRepositories] = useState<string[]>([appSettings.ArmorCode?.DefaultRepository || 'sample_repo']);
-  const [branchName, setBranchName] = useState<string>(appSettings.ArmorCode?.DefaultBranch || 'main');
-  const [selectedTypes, setSelectedTypes] = useState<string[]>(
-    appSettings.ArmorCode?.DefaultScanTypes || ["SAST", "SCA", "Secrets"]
-  );
+  // Query Form State defaults based on Report Type
+  const getInitialProjectName = (_type: ScanReportType) => {
+    return '';
+  };
+
+  const getInitialRepositories = (_type: ScanReportType) => {
+    return [];
+  };
+
+  const getInitialScanTypes = (type: ScanReportType) => {
+    if (type === 'CONTAINER') return ['Container Security'];
+    if (type === 'DYNAMIC') return ['DAST'];
+    return ['SAST', 'SCA', 'Secrets'];
+  };
+
+  const [projectName, setProjectName] = useState<string>(getInitialProjectName(initialReportType));
+  const [selectedRepositories, setSelectedRepositories] = useState<string[]>(getInitialRepositories(initialReportType));
+  const [branchName, setBranchName] = useState<string>('main');
+  const [selectedTypes, setSelectedTypes] = useState<string[]>(getInitialScanTypes(initialReportType));
   const [customEndpoint] = useState<string>(appSettings.ArmorCode?.ApiEndpoint || 'https://app.armorcode.com/user/findings/');
   const [apiKey] = useState<string>(appSettings.ArmorCode?.ApiKey || '');
 
   const repositoryName = selectedRepositories.join(', ');
+
+  // Switch Report Types cleanly
+  const handleSwitchReportType = (newType: ScanReportType, notifyParent = true) => {
+    setReportType(newType);
+    setActiveSubTab('QUERY');
+    setSelectedProductId('');
+
+    if (newType === 'CONTAINER') {
+      setSelectedTypes(['Container Security']);
+    } else if (newType === 'DYNAMIC') {
+      setSelectedTypes(['DAST']);
+    } else {
+      setSelectedTypes(['SAST', 'SCA', 'Secrets']);
+    }
+
+    if (notifyParent && onReportTypeChange) {
+      onReportTypeChange(newType);
+    }
+  };
+
+  // Sync external initialReportType prop changes
+  useEffect(() => {
+    if (initialReportType && initialReportType !== reportType) {
+      handleSwitchReportType(initialReportType, false);
+    }
+  }, [initialReportType]);
+
+  // Supported scan categories strictly filtered per report type (unnecessary items removed)
+  const getSupportedFindingTypes = (type: ScanReportType) => {
+    switch (type) {
+      case 'CONTAINER':
+        return [
+          { id: 'Container Security', name: 'Container Security', category: 'Aqua / Docker / K8s Images' }
+        ];
+      case 'DYNAMIC':
+        return [
+          { id: 'DAST', name: 'DAST', category: 'Dynamic Application Security Testing' }
+        ];
+      case 'STATIC':
+      default:
+        return [
+          { id: 'SAST', name: 'SAST', category: 'Static Code Analysis' },
+          { id: 'SCA', name: 'SCA', category: 'Software Composition Analysis' },
+          { id: 'Secrets', name: 'Secrets', category: 'Keys & Credential Tokens' }
+        ];
+    }
+  };
+
+  const supportedFindingTypes = getSupportedFindingTypes(reportType);
 
   // Products & Subproducts List States (Searchable Dropdowns)
   const [selectedProductId, setSelectedProductId] = useState<string>('');
@@ -130,7 +209,7 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
     }
   };
 
-  // Fetch Subproducts (Repositories) from https://app.armorcode.com/api/dashboard/sub-product/name-id via proxy
+  // Fetch Subproducts (Repositories / Container Images) from https://app.armorcode.com/api/dashboard/sub-product/name-id via proxy
   const loadArmorCodeSubproducts = async (prodIdOrName?: string, searchSubproductQuery?: string) => {
     setIsFetchingSubproducts(true);
     try {
@@ -157,8 +236,8 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
         setSubproductsOptions(res.subproducts.map(sp => ({
           id: String(sp.id || sp.name),
           name: sp.name,
-          description: sp.id ? `Repo ID: ${sp.id}` : `Repository under ${projectName}`,
-          category: sp.category || 'Repository'
+          description: sp.id ? `ID: ${sp.id}` : (reportType === 'CONTAINER' ? `Container Image under ${projectName}` : `Repository under ${projectName}`),
+          category: sp.category || (reportType === 'CONTAINER' ? 'Container Image' : 'Repository')
         })));
         setSubproductsSource(res.source || 'LIVE_API');
       } else {
@@ -171,17 +250,17 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
     }
   };
 
-  // Auto-fetch products on mount & when apiKey changes
+  // Auto-fetch products on mount & when apiKey or reportType changes
   useEffect(() => {
     loadArmorCodeProducts();
-  }, [apiKey]);
+  }, [apiKey, reportType]);
 
   // Auto-fetch subproducts whenever selected product or project name changes
   useEffect(() => {
     if (selectedProductId || projectName) {
       loadArmorCodeSubproducts(selectedProductId || projectName);
     }
-  }, [selectedProductId, projectName, apiKey]);
+  }, [selectedProductId, projectName, apiKey, reportType]);
 
   // UI Toggle States
   const [showSchemaMappingInfo, setShowSchemaMappingInfo] = useState<boolean>(false);
@@ -208,6 +287,7 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
   const [viewingEvidence, setViewingEvidence] = useState<PromotionEvidence | null>(null);
   const [evidenceSearchTerm, setEvidenceSearchTerm] = useState<string>('');
   const [evidenceStatusFilter, setEvidenceStatusFilter] = useState<string>('ALL');
+  const [evidenceCategoryFilter, setEvidenceCategoryFilter] = useState<'ALL' | 'STATIC' | 'CONTAINER' | 'DYNAMIC'>('ALL');
 
   const activeUser = loadActiveSsoUser();
 
@@ -227,29 +307,23 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
     }
   }, [promotionModalOpen, projectName, applications]);
 
-  // Supported 10 ArmorCode scan categories
-  const supportedFindingTypes = [
-    { id: 'API Security', name: 'API Security', category: 'API Scanner' },
-    { id: 'Code Insights', name: 'Code Insights', category: 'Quality' },
-    { id: 'Container Security', name: 'Container Security', category: 'Docker/K8s' },
-    { id: 'CSPM', name: 'CSPM', category: 'Cloud Security' },
-    { id: 'DAST', name: 'DAST', category: 'Dynamic Scan' },
-    { id: 'Data Security', name: 'Data Security', category: 'Data & PII' },
-    { id: 'Infrastructure Tools', name: 'Infrastructure Tools', category: 'IaC Tools' },
-    { id: 'SAST', name: 'SAST', category: 'Static Code' },
-    { id: 'SCA', name: 'SCA', category: 'Dependencies' },
-    { id: 'Secrets', name: 'Secrets', category: 'Keys & Tokens' }
-  ];
-
-  // Auto-run initial sample query & load historic evidences on component mount
+  // Auto-run initial sample query & load historic evidences on component mount & reportType change
   useEffect(() => {
     handleRunQuery();
     refreshEvidences();
-  }, []);
+  }, [reportType]);
 
   const refreshEvidences = async () => {
     const list = await asyncFetchPromotionEvidences();
-    setEvidenceList(list);
+    // Filter out any legacy sample certificates that might linger in client browser storage
+    const sampleIds = ['PROMO-EVID-2026-88219', 'PROMO-EVID-2026-74912', 'PROMO-EVID-2026-61304'];
+    const cleaned = list.filter(e => !sampleIds.includes(e.evidenceId) && e.project !== 'sample');
+    if (cleaned.length !== list.length) {
+      try {
+        localStorage.setItem('appsec_armorcode_promotion_evidences_v1', JSON.stringify(cleaned));
+      } catch {}
+    }
+    setEvidenceList(cleaned);
   };
 
   // Lookup subproduct IDs for selected repositories
@@ -366,8 +440,9 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
   const totalResolvedCount = rawFindings.filter(f => isFindingResolved(f)).length;
   const sastCount = rawFindings.filter(f => f.type.toLowerCase() === 'sast').length;
   const scaCount = rawFindings.filter(f => f.type.toLowerCase() === 'sca').length;
-  const secretCount = rawFindings.filter(f => f.type.toLowerCase() === 'secret').length;
-  const dastCount = rawFindings.filter(f => f.type.toLowerCase() === 'dast').length;
+  const secretCount = rawFindings.filter(f => f.type.toLowerCase().includes('secret')).length;
+  const containerCount = rawFindings.filter(f => f.type.toLowerCase().includes('container')).length;
+  const dastCount = rawFindings.filter(f => f.type.toLowerCase().includes('dast')).length;
 
   // Handle generating new Promotion Evidence Snapshot
   const handleGenerateEvidenceSubmit = async (e: React.FormEvent) => {
@@ -390,6 +465,11 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
       timestamp: new Date().toISOString()
     };
 
+    const resolvedReportCategory =
+      reportType === 'CONTAINER' ? 'Container Security Report' :
+      reportType === 'DYNAMIC' ? 'Dynamic Scan Report' :
+      'Static Scan Report';
+
     const newEvidence = await createAndSavePromotionEvidence({
       project: projectName || (mappedApp ? mappedApp.code : 'Enterprise-App'),
       repository: repositoryName.trim() || 'ALL_REPOSITORIES',
@@ -406,7 +486,9 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
       apiEndpointUsed: customEndpoint || 'https://app.armorcode.com/api/findings',
       isAdminOverride,
       applicationId: mappedApp ? mappedApp.id : (selectedAppId || undefined),
-      applicationName: mappedApp ? mappedApp.name : undefined
+      applicationName: mappedApp ? mappedApp.name : undefined,
+      reportType: reportType,
+      reportCategory: resolvedReportCategory
     });
 
     setPromotionModalOpen(false);
@@ -426,6 +508,42 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
     }
   };
 
+  const handleDeleteEvidence = (id: string) => {
+    if (confirm(`Are you sure you want to PERMANENTLY DELETE Promotion Evidence Certificate [${id}]?`)) {
+      const updated = deletePromotionEvidence(id);
+      setEvidenceList(updated);
+      if (viewingEvidence?.evidenceId === id) {
+        setViewingEvidence(null);
+      }
+    }
+  };
+
+  const handleClearAllEvidences = () => {
+    if (confirm('Are you sure you want to CLEAR ALL Promotion Evidence Certificates? This will wipe all recorded gate certificates.')) {
+      clearAllPromotionEvidences();
+      setEvidenceList([]);
+      setViewingEvidence(null);
+    }
+  };
+
+  // Helper to determine category of evidence
+  const getEvidenceCategory = (ev: PromotionEvidence): 'STATIC' | 'CONTAINER' | 'DYNAMIC' => {
+    if (ev.reportType) return ev.reportType;
+    const proj = (ev.project || '').toLowerCase();
+    const repo = (ev.repository || '').toLowerCase();
+    if (proj.includes('aqua') || repo.includes('aqua') || repo.includes('container') || repo.includes(':') || repo.includes('.tar')) return 'CONTAINER';
+    if (proj.includes('dynamic') || proj.includes('dast') || (ev.snapshotFindings || []).some(f => (f.type || '').toLowerCase().includes('dast') || (f.scanType || '').toLowerCase().includes('dast'))) return 'DYNAMIC';
+    return 'STATIC';
+  };
+
+  // Category counts for Promotion Records
+  const evidenceCategoryCounts = {
+    all: evidenceList.length,
+    static: evidenceList.filter(e => getEvidenceCategory(e) === 'STATIC').length,
+    container: evidenceList.filter(e => getEvidenceCategory(e) === 'CONTAINER').length,
+    dynamic: evidenceList.filter(e => getEvidenceCategory(e) === 'DYNAMIC').length
+  };
+
   // Filtered Evidence Records
   const filteredEvidences = evidenceList.filter(ev => {
     const matchesSearch =
@@ -434,10 +552,14 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
       ev.repository.toLowerCase().includes(evidenceSearchTerm.toLowerCase()) ||
       ev.branch.toLowerCase().includes(evidenceSearchTerm.toLowerCase()) ||
       ev.createdBy.toLowerCase().includes(evidenceSearchTerm.toLowerCase()) ||
-      ev.releaseVersion.toLowerCase().includes(evidenceSearchTerm.toLowerCase());
+      ev.releaseVersion.toLowerCase().includes(evidenceSearchTerm.toLowerCase()) ||
+      (ev.reportCategory || '').toLowerCase().includes(evidenceSearchTerm.toLowerCase());
 
     const matchesStatus = evidenceStatusFilter === 'ALL' || ev.status === evidenceStatusFilter;
-    return matchesSearch && matchesStatus;
+    const evCat = getEvidenceCategory(ev);
+    const matchesCategory = evidenceCategoryFilter === 'ALL' || evCat === evidenceCategoryFilter;
+
+    return matchesSearch && matchesStatus && matchesCategory;
   });
 
   return (
@@ -447,49 +569,100 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
       <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-2xl p-6 shadow-xl border border-slate-800 relative overflow-hidden">
         <div className="absolute top-0 right-0 -mt-10 -mr-10 w-80 h-80 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
         
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5 relative z-10">
           <div>
-            <div className="flex items-center gap-2 mb-2">
+            <div className="flex flex-wrap items-center gap-2 mb-2">
               <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 flex items-center gap-1.5">
-                <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
-                <span>ArmorCode Security API & Gate Promotion</span>
+                {reportType === 'CONTAINER' ? (
+                  <>
+                    <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>ArmorCode Container Security API</span>
+                  </>
+                ) : reportType === 'DYNAMIC' ? (
+                  <>
+                    <Zap className="w-3.5 h-3.5 text-purple-400" />
+                    <span>ArmorCode Dynamic Security API (DAST)</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>ArmorCode Static Security API (SAST/SCA/Secrets)</span>
+                  </>
+                )}
               </span>
               <span className="px-2 py-0.5 rounded text-[10px] font-mono text-emerald-400 bg-emerald-950/80 border border-emerald-800/80">
                 appsettings.json Configured
               </span>
             </div>
+
             <h1 className="text-2xl font-black text-slate-100 tracking-tight">
-              Application Security Reports & Auditable Promotion Gates
+              {reportType === 'CONTAINER'
+                ? 'Container Security Report & Promotion Gates'
+                : reportType === 'DYNAMIC'
+                ? 'Dynamic Scan Report & Promotion Gates'
+                : 'Static Scan Report & Promotion Gates'}
             </h1>
             <p className="text-sm text-slate-300 max-w-2xl mt-1">
-              Construct ArmorCode scan queries, evaluate zero-critical/high gate compliance, and generate auditable Promotion Evidence snapshots for production releases.
+              {reportType === 'CONTAINER'
+                ? 'Query and audit container images (Aqua Container Images, Docker base layers, Kubernetes pods) against ArmorCode zero-critical gate policies.'
+                : reportType === 'DYNAMIC'
+                ? 'Query and audit dynamic runtime security findings (DAST, web API fuzzing, injection checks) against ArmorCode gate policies.'
+                : 'Query and audit static application code, dependencies, and leaked secrets (SAST, SCA, Secrets) against ArmorCode gate policies.'}
             </p>
           </div>
 
+          {/* Navigation Sub-tabs & Report Types */}
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => setActiveSubTab('QUERY')}
-              className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
-                activeSubTab === 'QUERY'
-                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
-                  : 'bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 border border-slate-700'
-              }`}
-            >
-              <Terminal className="w-4 h-4" />
-              <span>Query & Scanner</span>
-            </button>
+            <div className="bg-slate-950/80 p-1 rounded-2xl border border-slate-800 flex flex-wrap gap-1">
+              <button
+                onClick={() => handleSwitchReportType('STATIC')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeSubTab === 'QUERY' && reportType === 'STATIC'
+                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span>Static Scan Report</span>
+              </button>
+
+              <button
+                onClick={() => handleSwitchReportType('CONTAINER')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeSubTab === 'QUERY' && reportType === 'CONTAINER'
+                    ? 'bg-cyan-600 text-white shadow-md shadow-cyan-600/30'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Container Security</span>
+              </button>
+
+              <button
+                onClick={() => handleSwitchReportType('DYNAMIC')}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeSubTab === 'QUERY' && reportType === 'DYNAMIC'
+                    ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span>Dynamic Scan (DAST)</span>
+              </button>
+            </div>
+
             <button
               onClick={() => setActiveSubTab('EVIDENCES')}
               className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer relative ${
                 activeSubTab === 'EVIDENCES'
-                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+                  ? 'bg-amber-500 text-slate-950 font-black shadow-lg shadow-amber-500/30'
                   : 'bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 border border-slate-700'
               }`}
             >
-              <Award className="w-4 h-4 text-amber-400" />
+              <Award className="w-4 h-4" />
               <span>Auditable Promotion Records</span>
               {evidenceList.length > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-amber-500 text-slate-950 font-black">
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-slate-900 text-amber-400 font-bold border border-amber-500/30">
                   {evidenceList.length}
                 </span>
               )}
@@ -532,7 +705,7 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                     
                     <p className="text-xs text-slate-300 mt-1">
                       {complianceResult.isCompliant
-                        ? `Project '${projectName}' (Repo: ${repositoryName || 'ALL'}, Branch: ${branchName}) has 0 unresolved Critical/High findings. Meets all security standards for production promotion.`
+                        ? `${reportType === 'CONTAINER' ? 'Product' : 'Project'} '${projectName}' (${reportType === 'CONTAINER' ? 'Container Images' : 'Repo'}: ${repositoryName || 'ALL'}, Branch: ${branchName}) has 0 unresolved Critical/High findings. Meets all security standards for production promotion.`
                         : `Gate standard failed: ${complianceResult.reasons.join(' ')}`}
                     </p>
 
@@ -599,7 +772,7 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
 {JSON.stringify(appSettings.ArmorCode?.ComplianceStandards || {}, null, 2)}
                   </pre>
                 </div>
-                <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
+                <div className="bg-slate-950 p-3.5 rounded-xl border border-emerald-400 uppercase font-mono tracking-wider block">
                   <span className="text-[11px] font-bold text-emerald-400 uppercase font-mono tracking-wider block">
                     Request / Response Mapping
                   </span>
@@ -621,7 +794,11 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                     Construct ArmorCode Query Parameters
                   </h2>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Filter vulnerability scans by Product, Repositories, Branch, and Scanner Types.
+                    {reportType === 'CONTAINER'
+                      ? 'Filter container security findings by Product Name (e.g. Aqua Container Images) and Container Image Subproducts.'
+                      : reportType === 'DYNAMIC'
+                      ? 'Filter dynamic application security findings (DAST) by Project and Target Endpoints.'
+                      : 'Filter static security findings (SAST, SCA, Secrets) by Product, Repositories, and Branch.'}
                   </p>
                 </div>
               </div>
@@ -646,10 +823,10 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {/* Project Name (Searchable Product Dropdown) */}
+              {/* Product / Project Name (Searchable Product Dropdown) */}
               <div className="space-y-1.5 md:col-span-2 lg:col-span-1">
                 <SearchableSelect
-                  label="Project Name (ArmorCode Product)"
+                  label={reportType === 'CONTAINER' ? 'Product Name (ArmorCode Product)' : 'Project Name (ArmorCode Product)'}
                   value={projectName}
                   onChange={(val, selectedOpt) => {
                     setProjectName(val);
@@ -668,15 +845,23 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                     loadArmorCodeProducts(query);
                   }}
                   options={productsOptions}
-                  placeholder="Type to search or select ArmorCode product..."
+                  placeholder={
+                    reportType === 'CONTAINER'
+                      ? 'Type to search container product (e.g. Aqua Container Images)...'
+                      : 'Type to search or select ArmorCode product...'
+                  }
                   isLoading={isFetchingProducts}
                   onRefresh={() => loadArmorCodeProducts(projectName || '')}
                   required={true}
                   iconType="product"
-                  badgeText={productsSource === 'LIVE_API' ? 'ArmorCode Elastic API (Live)' : 'ArmorCode Catalog'}
-                  helpText="Searches live in real-time against POST https://app.armorcode.com/user/product/elastic/paged as you type."
+                  badgeText={productsSource === 'LIVE_API' ? 'ArmorCode Elastic API (Live)' : (reportType === 'CONTAINER' ? 'Aqua Container Catalog' : 'ArmorCode Catalog')}
+                  helpText={
+                    reportType === 'CONTAINER'
+                      ? 'Searches live against ArmorCode Elastic API for container image products.'
+                      : 'Searches live in real-time against POST https://app.armorcode.com/user/product/elastic/paged.'
+                  }
                 />
-                {applications.length > 0 && (
+                {applications.length > 0 && reportType !== 'CONTAINER' && (
                   <div className="flex flex-wrap items-center gap-1.5 pt-1">
                     <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Quick App Shortcuts:</span>
                     {applications.slice(0, 5).map((app) => (
@@ -691,26 +876,63 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                     ))}
                   </div>
                 )}
+                {reportType === 'CONTAINER' && (
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    <span className="text-[10px] text-cyan-600 dark:text-cyan-400 font-medium">Sample Container Product:</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProjectName('Aqua Container Images');
+                        loadArmorCodeSubproducts('Aqua Container Images');
+                      }}
+                      className="px-2 py-0.5 rounded-md bg-cyan-50 dark:bg-cyan-950/70 hover:bg-cyan-100 dark:hover:bg-cyan-900/80 text-cyan-800 dark:text-cyan-300 text-[11px] font-mono transition-all cursor-pointer border border-cyan-200 dark:border-cyan-800 font-semibold"
+                    >
+                      🐳 Aqua Container Images
+                    </button>
+                  </div>
+                )}
               </div>
 
-              {/* Repository Names (Multi-Select Searchable Subproduct Dropdown) */}
+              {/* Subproducts: Container Image Names / Repository Names */}
               <div className="space-y-1.5 md:col-span-2 lg:col-span-1">
                 <MultiSearchableSelect
-                  label="Repository Names (Subproducts)"
+                  label={
+                    reportType === 'CONTAINER'
+                      ? 'Container Image Names (Subproducts)'
+                      : reportType === 'DYNAMIC'
+                      ? 'Target Endpoints / Microservices (Subproducts)'
+                      : 'Repository Names (Subproducts)'
+                  }
                   values={selectedRepositories}
                   onChange={(vals) => setSelectedRepositories(vals)}
                   onSearchChange={(query) => {
                     loadArmorCodeSubproducts(selectedProductId || projectName, query);
                   }}
                   options={subproductsOptions}
-                  placeholder="Select repositories or type to search..."
-                  selectAllLabel="Select All Repositories"
+                  placeholder={
+                    reportType === 'CONTAINER'
+                      ? 'Select container images or type to search (e.g. frontend-app:v2.4.0)...'
+                      : reportType === 'DYNAMIC'
+                      ? 'Select target endpoints or type to search (e.g. /api/v1/search)...'
+                      : 'Select repositories or type to search...'
+                  }
+                  selectAllLabel={
+                    reportType === 'CONTAINER'
+                      ? 'Select All Container Images'
+                      : reportType === 'DYNAMIC'
+                      ? 'Select All Endpoints'
+                      : 'Select All Repositories'
+                  }
                   isLoading={isFetchingSubproducts}
                   onRefresh={() => loadArmorCodeSubproducts(selectedProductId || projectName)}
                   required={false}
                   iconType="repository"
-                  badgeText={subproductsSource === 'LIVE_API' ? 'ArmorCode Dashboard Sub-Product API' : 'ArmorCode Catalog'}
-                  helpText={`Queries repositories live via POST https://app.armorcode.com/api/dashboard/sub-product/name-id${selectedProductId ? ` (Product ID: ${selectedProductId})` : ''}.`}
+                  badgeText={subproductsSource === 'LIVE_API' ? 'ArmorCode Dashboard Sub-Product API' : (reportType === 'CONTAINER' ? 'Container Registry' : 'ArmorCode Catalog')}
+                  helpText={
+                    reportType === 'CONTAINER'
+                      ? `Queries container image subproducts live via ArmorCode API${selectedProductId ? ` (Product ID: ${selectedProductId})` : ''}.`
+                      : `Queries repositories live via POST https://app.armorcode.com/api/dashboard/sub-product/name-id${selectedProductId ? ` (Product ID: ${selectedProductId})` : ''}.`
+                  }
                 />
                 {subproductsOptions.length > 0 && (
                   <div className="flex flex-wrap items-center justify-between gap-1.5 pt-0.5 text-[11px]">
@@ -736,83 +958,112 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                       )}
                     </div>
                     <span className="text-[10px] font-mono text-slate-500">
-                      {selectedRepositories.length === 0 ? 'Will scan ALL repositories' : `${selectedRepositories.length} selected`}
+                      {selectedRepositories.length === 0
+                        ? (reportType === 'CONTAINER' ? 'Will scan ALL container images' : 'Will scan ALL repositories')
+                        : `${selectedRepositories.length} selected`}
                     </span>
                   </div>
                 )}
               </div>
 
-              {/* Branch Name */}
+              {/* Branch / Tag Identifier */}
               <div className="space-y-1.5 md:col-span-2 lg:col-span-1">
                 <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                  Branch Name <span className="text-slate-600 dark:text-slate-400 font-normal">(cycode_branch)</span>
+                  {reportType === 'CONTAINER' ? 'Image Tag / Branch' : 'Branch Name'}{' '}
+                  <span className="text-slate-600 dark:text-slate-400 font-normal">(cycode_branch)</span>
                 </label>
                 <input
                   type="text"
                   value={branchName}
                   onChange={(e) => setBranchName(e.target.value)}
-                  placeholder="e.g. master, main, release/v2"
+                  placeholder={reportType === 'CONTAINER' ? 'e.g. latest, v2.4.0, main' : 'e.g. master, main, release/v2'}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 font-mono text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                 />
                 <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-tight">
-                  Branch identifier for scanner findings.
+                  {reportType === 'CONTAINER' ? 'Container image tag or VCS branch identifier.' : 'Branch identifier for scanner findings.'}
                 </p>
               </div>
             </div>
 
-            {/* Scan Types */}
+            {/* Scan Types (Locked and strictly filtered according to report type requirement) */}
             <div className="space-y-2 pt-3 border-t border-slate-100 dark:border-slate-800">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                  Security Report Scanner Types ({selectedTypes.length}/10)
-                </label>
-                <div className="flex items-center gap-1.5 text-[11px]">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedTypes(supportedFindingTypes.map(t => t.id))}
-                    className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/70 hover:bg-indigo-100 dark:hover:bg-indigo-900 text-indigo-700 dark:text-indigo-300 font-medium transition-all cursor-pointer border border-indigo-200 dark:border-indigo-800"
-                  >
-                    ✓ Select All (10)
-                  </button>
-                  {selectedTypes.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setSelectedTypes(['SAST', 'SCA', 'Secrets'])}
-                      className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/50 text-slate-600 dark:text-slate-400 hover:text-rose-600 font-medium transition-all cursor-pointer border border-slate-200 dark:border-slate-700"
-                    >
-                      Reset Defaults (SAST, SCA, Secrets)
-                    </button>
-                  )}
+                <div className="flex items-center gap-2">
+                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Security Report Scanner Types ({selectedTypes.length}/{supportedFindingTypes.length})
+                  </label>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700 flex items-center gap-1">
+                    <Lock className="w-3 h-3 text-slate-500" />
+                    <span>Policy Fixed</span>
+                  </span>
+                </div>
+                <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                  {reportType === 'CONTAINER'
+                    ? 'Container Security mode active'
+                    : reportType === 'DYNAMIC'
+                    ? 'Dynamic Scan (DAST) mode active'
+                    : 'Static Scan (SAST, SCA, Secrets) active'}
                 </div>
               </div>
               
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
                 {supportedFindingTypes.map((t) => {
                   const isSelected = selectedTypes.includes(t.id);
                   return (
-                    <button
+                    <div
                       key={t.id}
-                      type="button"
-                      onClick={() => handleToggleType(t.id)}
-                      className={`p-2.5 rounded-xl border text-left flex items-start justify-between transition-all cursor-pointer ${
+                      className={`p-3 rounded-xl border flex items-center justify-between transition-all ${
                         isSelected
-                          ? 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-300 dark:border-indigo-700 text-indigo-900 dark:text-indigo-200'
-                          : 'bg-slate-50 dark:bg-slate-950/40 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 opacity-70 hover:opacity-100'
+                          ? reportType === 'CONTAINER'
+                            ? 'bg-cyan-50 dark:bg-cyan-950/40 border-cyan-300 dark:border-cyan-800 text-cyan-900 dark:text-cyan-200'
+                            : reportType === 'DYNAMIC'
+                            ? 'bg-purple-50 dark:bg-purple-950/40 border-purple-300 dark:border-purple-800 text-purple-900 dark:text-purple-200'
+                            : 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-800 text-indigo-900 dark:text-indigo-200'
+                          : 'bg-slate-50 dark:bg-slate-950/40 border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400'
                       }`}
                     >
-                      <div>
-                        <span className="text-xs font-bold uppercase font-mono block">{t.id}</span>
-                        <span className="text-[11px] leading-tight block text-slate-600 dark:text-slate-400 truncate">{t.category}</span>
+                      <div className="flex items-center gap-2.5">
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                          reportType === 'CONTAINER'
+                            ? 'bg-cyan-600/10 text-cyan-600 dark:text-cyan-400'
+                            : reportType === 'DYNAMIC'
+                            ? 'bg-purple-600/10 text-purple-600 dark:text-purple-400'
+                            : 'bg-indigo-600/10 text-indigo-600 dark:text-indigo-400'
+                        }`}>
+                          {reportType === 'CONTAINER' ? (
+                            <Layers className="w-4 h-4" />
+                          ) : reportType === 'DYNAMIC' ? (
+                            <Zap className="w-4 h-4" />
+                          ) : (
+                            <Shield className="w-4 h-4" />
+                          )}
+                        </div>
+                        <div>
+                          <span className="text-xs font-bold uppercase font-mono block">{t.id}</span>
+                          <span className="text-[11px] leading-tight block text-slate-500 dark:text-slate-400 truncate max-w-xs">{t.category}</span>
+                        </div>
                       </div>
-                      <div className={`w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold border ${
-                        isSelected ? 'bg-indigo-600 text-white border-indigo-600' : 'border-slate-400'
+                      <div className={`w-5 h-5 rounded-md flex items-center justify-center text-[11px] font-bold ${
+                        reportType === 'CONTAINER'
+                          ? 'bg-cyan-600 text-white'
+                          : reportType === 'DYNAMIC'
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-indigo-600 text-white'
                       }`}>
-                        {isSelected ? '✓' : ''}
+                        ✓
                       </div>
-                    </button>
+                    </div>
                   );
                 })}
               </div>
+
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 pt-1">
+                {reportType === 'CONTAINER'
+                  ? '🔒 Container Security scanners analyze Aqua Container base layers, installed OS packages, and container runtime CVEs.'
+                  : reportType === 'DYNAMIC'
+                  ? '🔒 Dynamic Application Security Testing (DAST) analyzes live endpoints for OWASP Top 10 vulnerabilities.'
+                  : '🔒 Static scan policies evaluate SAST source code flaws, SCA library dependencies, and hardcoded API tokens.'}
+              </p>
             </div>
 
             {/* Bottom Action Bar */}
@@ -829,7 +1080,7 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                 className="sm:self-end px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 transition-all cursor-pointer"
               >
                 <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-                <span>{isLoading ? 'Querying ArmorCode...' : 'Query Security Findings'}</span>
+                <span>{isLoading ? 'Querying ArmorCode...' : `Query ${reportType === 'CONTAINER' ? 'Container' : reportType === 'DYNAMIC' ? 'Dynamic' : 'Static'} Findings`}</span>
               </button>
             </div>
           </div>
@@ -854,18 +1105,52 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                 <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider block">Resolved / Mitigated</span>
                 <span className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-1 block">{totalResolvedCount}</span>
               </div>
-              <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
-                <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider block">SAST Code</span>
-                <span className="text-xl font-black text-indigo-600 dark:text-indigo-400 mt-1 block">{sastCount}</span>
-              </div>
-              <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
-                <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider block">SCA Libraries</span>
-                <span className="text-xl font-black text-blue-600 dark:text-blue-400 mt-1 block">{scaCount}</span>
-              </div>
-              <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
-                <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider block">Secrets Leaked</span>
-                <span className="text-xl font-black text-amber-600 dark:text-amber-400 mt-1 block">{secretCount}</span>
-              </div>
+              {reportType === 'CONTAINER' ? (
+                <>
+                  <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+                    <span className="text-[10px] font-bold text-cyan-600 dark:text-cyan-400 uppercase tracking-wider block">Container Vulns</span>
+                    <span className="text-xl font-black text-cyan-600 dark:text-cyan-400 mt-1 block">{containerCount || rawFindings.length}</span>
+                  </div>
+                  <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+                    <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider block">Critical Vulns</span>
+                    <span className="text-xl font-black text-indigo-600 dark:text-indigo-400 mt-1 block">{criticalCount}</span>
+                  </div>
+                  <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+                    <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider block">High Vulns</span>
+                    <span className="text-xl font-black text-amber-600 dark:text-amber-400 mt-1 block">{highCount}</span>
+                  </div>
+                </>
+              ) : reportType === 'DYNAMIC' ? (
+                <>
+                  <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+                    <span className="text-[10px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider block">DAST Endpoints</span>
+                    <span className="text-xl font-black text-purple-600 dark:text-purple-400 mt-1 block">{dastCount || rawFindings.length}</span>
+                  </div>
+                  <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+                    <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider block">Critical Vulns</span>
+                    <span className="text-xl font-black text-indigo-600 dark:text-indigo-400 mt-1 block">{criticalCount}</span>
+                  </div>
+                  <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+                    <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider block">High Vulns</span>
+                    <span className="text-xl font-black text-amber-600 dark:text-amber-400 mt-1 block">{highCount}</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+                    <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider block">SAST Code</span>
+                    <span className="text-xl font-black text-indigo-600 dark:text-indigo-400 mt-1 block">{sastCount}</span>
+                  </div>
+                  <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+                    <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider block">SCA Libraries</span>
+                    <span className="text-xl font-black text-blue-600 dark:text-blue-400 mt-1 block">{scaCount}</span>
+                  </div>
+                  <div className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+                    <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider block">Secrets Leaked</span>
+                    <span className="text-xl font-black text-amber-600 dark:text-amber-400 mt-1 block">{secretCount}</span>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -935,6 +1220,108 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                   </button>
                 )}
               </div>
+            </div>
+
+            {/* Quick Category & Severity Filter Chips */}
+            <div className="px-4 py-2.5 bg-slate-100/60 dark:bg-slate-950/30 border-b border-slate-200 dark:border-slate-800/80 flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="text-[11px] font-bold text-slate-500 mr-1">Quick Filters:</span>
+              
+              {/* Category Chips */}
+              <button
+                onClick={() => setSelectedTypeFilter('ALL')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                  selectedTypeFilter === 'ALL'
+                    ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 shadow-xs'
+                    : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-slate-400'
+                }`}
+              >
+                All Types
+              </button>
+              <button
+                onClick={() => setSelectedTypeFilter('SAST')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                  selectedTypeFilter === 'SAST'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 border border-slate-200 dark:border-slate-700 hover:border-indigo-300'
+                }`}
+              >
+                <Code className="w-3 h-3" />
+                <span>SAST</span>
+              </button>
+              <button
+                onClick={() => setSelectedTypeFilter('SCA')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                  selectedTypeFilter === 'SCA'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 border border-slate-200 dark:border-slate-700 hover:border-blue-300'
+                }`}
+              >
+                <Package className="w-3 h-3" />
+                <span>SCA</span>
+              </button>
+              <button
+                onClick={() => setSelectedTypeFilter('SECRET')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                  selectedTypeFilter === 'SECRET'
+                    ? 'bg-amber-600 text-white shadow-xs'
+                    : 'bg-white dark:bg-slate-800 text-amber-600 dark:text-amber-400 border border-slate-200 dark:border-slate-700 hover:border-amber-300'
+                }`}
+              >
+                <Key className="w-3 h-3" />
+                <span>Secrets</span>
+              </button>
+              <button
+                onClick={() => setSelectedTypeFilter('CONTAINER')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                  selectedTypeFilter === 'CONTAINER'
+                    ? 'bg-cyan-600 text-white shadow-xs'
+                    : 'bg-white dark:bg-slate-800 text-cyan-600 dark:text-cyan-400 border border-slate-200 dark:border-slate-700 hover:border-cyan-300'
+                }`}
+              >
+                <Layers className="w-3 h-3" />
+                <span>Container</span>
+              </button>
+              <button
+                onClick={() => setSelectedTypeFilter('DAST')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                  selectedTypeFilter === 'DAST'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'bg-white dark:bg-slate-800 text-purple-600 dark:text-purple-400 border border-slate-200 dark:border-slate-700 hover:border-purple-300'
+                }`}
+              >
+                <Zap className="w-3 h-3" />
+                <span>DAST</span>
+              </button>
+
+              <div className="h-4 w-px bg-slate-300 dark:bg-slate-700 mx-1 hidden sm:block" />
+
+              {/* Gate Blocker Quick Toggle */}
+              <button
+                onClick={() => setSelectedStatusFilter(selectedStatusFilter === 'BLOCKING' ? 'ALL' : 'BLOCKING')}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                  selectedStatusFilter === 'BLOCKING'
+                    ? 'bg-rose-600 text-white shadow-xs ring-2 ring-rose-500/20'
+                    : 'bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800/80 hover:border-rose-400'
+                }`}
+              >
+                <AlertOctagon className="w-3 h-3" />
+                <span>Gate Blockers Only</span>
+              </button>
+
+              {/* Reset All Filters Button */}
+              {(selectedTypeFilter !== 'ALL' || selectedSeverityFilter !== 'ALL' || selectedStatusFilter !== 'ALL' || searchTerm) && (
+                <button
+                  onClick={() => {
+                    setSelectedTypeFilter('ALL');
+                    setSelectedSeverityFilter('ALL');
+                    setSelectedStatusFilter('ALL');
+                    setSearchTerm('');
+                  }}
+                  className="px-2 py-1 text-[11px] text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 underline font-medium cursor-pointer ml-auto"
+                >
+                  Reset Filters
+                </button>
+              )}
             </div>
 
             {/* Findings Data Table */}
@@ -1191,7 +1578,82 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
       {activeSubTab === 'EVIDENCES' && (
         <div className="space-y-6 animate-in fade-in duration-200">
           
-          {/* Records Search Toolbar */}
+          {/* Promotion Records Category KPI Cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+            <button
+              onClick={() => setEvidenceCategoryFilter('ALL')}
+              className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+                evidenceCategoryFilter === 'ALL'
+                  ? 'bg-indigo-50/80 dark:bg-indigo-950/60 border-indigo-300 dark:border-indigo-700 shadow-sm ring-2 ring-indigo-500/20'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">All Certificates</span>
+                <Award className="w-4 h-4 text-indigo-500" />
+              </div>
+              <div className="mt-2 flex items-baseline gap-1.5">
+                <span className="text-2xl font-black text-slate-900 dark:text-slate-100">{evidenceCategoryCounts.all}</span>
+                <span className="text-[10px] text-slate-400 font-mono">Issued Total</span>
+              </div>
+            </button>
+
+            <button
+              onClick={() => setEvidenceCategoryFilter('STATIC')}
+              className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+                evidenceCategoryFilter === 'STATIC'
+                  ? 'bg-emerald-50/80 dark:bg-emerald-950/60 border-emerald-300 dark:border-emerald-700 shadow-sm ring-2 ring-emerald-500/20'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">Static Scan Gates</span>
+                <ShieldCheck className="w-4 h-4 text-emerald-500" />
+              </div>
+              <div className="mt-2 flex items-baseline gap-1.5">
+                <span className="text-2xl font-black text-emerald-600 dark:text-emerald-400">{evidenceCategoryCounts.static}</span>
+                <span className="text-[10px] text-slate-400 font-mono">SAST / SCA / Secrets</span>
+              </div>
+            </button>
+
+            <button
+              onClick={() => setEvidenceCategoryFilter('CONTAINER')}
+              className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+                evidenceCategoryFilter === 'CONTAINER'
+                  ? 'bg-cyan-50/80 dark:bg-cyan-950/60 border-cyan-300 dark:border-cyan-700 shadow-sm ring-2 ring-cyan-500/20'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-cyan-600 dark:text-cyan-400 uppercase tracking-wider">Container Gates</span>
+                <Layers className="w-4 h-4 text-cyan-500" />
+              </div>
+              <div className="mt-2 flex items-baseline gap-1.5">
+                <span className="text-2xl font-black text-cyan-600 dark:text-cyan-400">{evidenceCategoryCounts.container}</span>
+                <span className="text-[10px] text-slate-400 font-mono">Aqua Images</span>
+              </div>
+            </button>
+
+            <button
+              onClick={() => setEvidenceCategoryFilter('DYNAMIC')}
+              className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+                evidenceCategoryFilter === 'DYNAMIC'
+                  ? 'bg-purple-50/80 dark:bg-purple-950/60 border-purple-300 dark:border-purple-700 shadow-sm ring-2 ring-purple-500/20'
+                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-wider">Dynamic Gates</span>
+                <Zap className="w-4 h-4 text-purple-500" />
+              </div>
+              <div className="mt-2 flex items-baseline gap-1.5">
+                <span className="text-2xl font-black text-purple-600 dark:text-purple-400">{evidenceCategoryCounts.dynamic}</span>
+                <span className="text-[10px] text-slate-400 font-mono">DAST & APIs</span>
+              </div>
+            </button>
+          </div>
+
+          {/* Records Search & Filter Toolbar */}
           <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3">
             <div className="relative flex-1 max-w-md">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
@@ -1199,12 +1661,23 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                 type="text"
                 value={evidenceSearchTerm}
                 onChange={(e) => setEvidenceSearchTerm(e.target.value)}
-                placeholder="Search evidences by ID, project, repo, branch, or release version..."
+                placeholder="Search evidences by ID, project, repo, branch, version, or category..."
                 className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs text-slate-900 dark:text-slate-100 outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={evidenceCategoryFilter}
+                onChange={(e) => setEvidenceCategoryFilter(e.target.value as any)}
+                className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-slate-200 outline-none font-medium cursor-pointer"
+              >
+                <option value="ALL">All Categories ({evidenceCategoryCounts.all})</option>
+                <option value="STATIC">Static Scan Reports ({evidenceCategoryCounts.static})</option>
+                <option value="CONTAINER">Container Security Reports ({evidenceCategoryCounts.container})</option>
+                <option value="DYNAMIC">Dynamic Scan Reports ({evidenceCategoryCounts.dynamic})</option>
+              </select>
+
               <select
                 value={evidenceStatusFilter}
                 onChange={(e) => setEvidenceStatusFilter(e.target.value)}
@@ -1220,8 +1693,18 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                 className="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
-                <span>Refresh Audit Logs</span>
+                <span>Refresh Logs</span>
               </button>
+
+              {evidenceList.length > 0 && (
+                <button
+                  onClick={handleClearAllEvidences}
+                  className="px-3.5 py-2 bg-rose-50 dark:bg-rose-950/60 hover:bg-rose-100 dark:hover:bg-rose-900 text-rose-700 dark:text-rose-300 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all cursor-pointer border border-rose-200 dark:border-rose-800"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Clear All Certificates</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -1232,6 +1715,7 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                 <thead>
                   <tr className="bg-slate-100 dark:bg-slate-950 text-slate-600 dark:text-slate-400 text-[10px] font-bold uppercase tracking-wider font-mono border-b border-slate-200 dark:border-slate-800">
                     <th className="py-3.5 px-4">Evidence ID</th>
+                    <th className="py-3.5 px-4">Category</th>
                     <th className="py-3.5 px-4">Project / Repository</th>
                     <th className="py-3.5 px-4">Branch & Version</th>
                     <th className="py-3.5 px-4">Target Env</th>
@@ -1243,7 +1727,7 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-xs">
                   {filteredEvidences.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-slate-500 dark:text-slate-400">
+                      <td colSpan={8} className="py-12 text-center text-slate-500 dark:text-slate-400">
                         <Award className="w-10 h-10 text-slate-400 mx-auto mb-2 opacity-50" />
                         <p className="font-bold text-sm text-slate-700 dark:text-slate-300">No Auditable Promotion Evidences Found</p>
                         <p className="text-xs text-slate-500 mt-1">Run an ArmorCode scan query and click "Generate Promotion Evidence" when compliant.</p>
@@ -1252,6 +1736,8 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                   ) : (
                     filteredEvidences.map((ev) => {
                       const isRevoked = ev.status === 'REVOKED';
+                      const evCat = getEvidenceCategory(ev);
+
                       return (
                         <tr key={ev.evidenceId} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
                           <td className="py-3.5 px-4 font-mono font-bold text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
@@ -1260,6 +1746,24 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                               <span>{ev.evidenceId}</span>
                             </div>
                             <span className="text-[9px] font-mono text-slate-400 block truncate max-w-[120px]">{ev.verificationHash}</span>
+                          </td>
+                          <td className="py-3.5 px-4 whitespace-nowrap">
+                            {evCat === 'CONTAINER' ? (
+                              <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-cyan-50 dark:bg-cyan-950/80 text-cyan-700 dark:text-cyan-300 border border-cyan-200 dark:border-cyan-800 flex items-center gap-1.5 w-fit">
+                                <Layers className="w-3 h-3 text-cyan-500" />
+                                <span>Container Security</span>
+                              </span>
+                            ) : evCat === 'DYNAMIC' ? (
+                              <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-purple-50 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800 flex items-center gap-1.5 w-fit">
+                                <Zap className="w-3 h-3 text-purple-500" />
+                                <span>Dynamic Scan (DAST)</span>
+                              </span>
+                            ) : (
+                              <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5 w-fit">
+                                <ShieldCheck className="w-3 h-3 text-emerald-500" />
+                                <span>Static Scan (SAST/SCA)</span>
+                              </span>
+                            )}
                           </td>
                           <td className="py-3.5 px-4 font-bold text-slate-900 dark:text-slate-100 whitespace-nowrap">
                             <p>{ev.project}</p>
@@ -1310,12 +1814,19 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                             {!isRevoked && (
                               <button
                                 onClick={() => handleRevokeEvidence(ev.evidenceId)}
-                                className="px-2 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-rose-100 dark:hover:bg-rose-950 text-slate-600 dark:text-slate-400 hover:text-rose-600 dark:hover:text-rose-300 text-xs rounded-lg transition-all cursor-pointer"
+                                className="px-2 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-amber-100 dark:hover:bg-amber-950 text-slate-600 dark:text-slate-400 hover:text-amber-600 dark:hover:text-amber-300 text-xs rounded-lg transition-all cursor-pointer"
                                 title="Revoke Certificate"
                               >
-                                <Trash2 className="w-3.5 h-3.5" />
+                                Revoke
                               </button>
                             )}
+                            <button
+                              onClick={() => handleDeleteEvidence(ev.evidenceId)}
+                              className="px-2 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-rose-100 dark:hover:bg-rose-950 text-slate-600 dark:text-slate-400 hover:text-rose-600 dark:hover:text-rose-300 text-xs rounded-lg transition-all cursor-pointer"
+                              title="Delete Certificate"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
                           </td>
                         </tr>
                       );
@@ -1351,6 +1862,27 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
 
             <form onSubmit={handleGenerateEvidenceSubmit} className="space-y-4 text-xs">
               
+              {/* Scan Category Indicator */}
+              <div className="flex items-center justify-between p-3 rounded-xl bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+                <span className="font-bold text-slate-600 dark:text-slate-400">Report Category:</span>
+                {reportType === 'CONTAINER' ? (
+                  <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-cyan-100 dark:bg-cyan-950 text-cyan-800 dark:text-cyan-300 border border-cyan-300 dark:border-cyan-800 flex items-center gap-1">
+                    <Layers className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />
+                    <span>Container Security Report (Aqua)</span>
+                  </span>
+                ) : reportType === 'DYNAMIC' ? (
+                  <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-purple-100 dark:bg-purple-950 text-purple-800 dark:text-purple-300 border border-purple-300 dark:border-purple-800 flex items-center gap-1">
+                    <Zap className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+                    <span>Dynamic Scan Report (DAST)</span>
+                  </span>
+                ) : (
+                  <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800 flex items-center gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    <span>Static Scan Report (SAST/SCA/Secrets)</span>
+                  </span>
+                )}
+              </div>
+
               {/* Snapshot metadata summary */}
               <div className="bg-slate-50 dark:bg-slate-950 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1 font-mono">
                 <div className="flex justify-between text-slate-700 dark:text-slate-300 font-bold">
@@ -1496,9 +2028,28 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
                 </div>
               </div>
 
-              <span className="px-3 py-1 rounded-full text-[10px] font-mono font-bold uppercase tracking-widest bg-emerald-950 text-emerald-400 border border-emerald-800/80 inline-block">
-                OFFICIAL PROMOTION PASSPORT & EVIDENCE CERTIFICATE
-              </span>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <span className="px-3 py-1 rounded-full text-[10px] font-mono font-bold uppercase tracking-widest bg-emerald-950 text-emerald-400 border border-emerald-800/80 inline-block">
+                  OFFICIAL PROMOTION PASSPORT & EVIDENCE CERTIFICATE
+                </span>
+
+                {getEvidenceCategory(viewingEvidence) === 'CONTAINER' ? (
+                  <span className="px-3 py-1 rounded-full text-[10px] font-mono font-bold bg-cyan-950 text-cyan-300 border border-cyan-800 flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Container Security Report (Aqua)</span>
+                  </span>
+                ) : getEvidenceCategory(viewingEvidence) === 'DYNAMIC' ? (
+                  <span className="px-3 py-1 rounded-full text-[10px] font-mono font-bold bg-purple-950 text-purple-300 border border-purple-800 flex items-center gap-1.5">
+                    <Zap className="w-3.5 h-3.5 text-purple-400" />
+                    <span>Dynamic Scan Report (DAST)</span>
+                  </span>
+                ) : (
+                  <span className="px-3 py-1 rounded-full text-[10px] font-mono font-bold bg-emerald-950 text-emerald-300 border border-emerald-800 flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Static Scan Report (SAST/SCA)</span>
+                  </span>
+                )}
+              </div>
 
               <h2 className="text-xl font-black text-slate-100 tracking-tight">
                 {viewingEvidence.project}
@@ -1619,13 +2170,22 @@ export const SecurityReportsView: React.FC<SecurityReportsViewProps> = ({ applic
 
             {/* Actions Footer */}
             <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800">
-              <button
-                onClick={() => downloadEvidenceJSON(viewingEvidence)}
-                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all cursor-pointer border border-slate-700"
-              >
-                <Download className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Export JSON Evidence</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => downloadEvidenceJSON(viewingEvidence)}
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all cursor-pointer border border-slate-700"
+                >
+                  <Download className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Export JSON Evidence</span>
+                </button>
+                <button
+                  onClick={() => handleDeleteEvidence(viewingEvidence.evidenceId)}
+                  className="px-3 py-2 bg-rose-950/60 hover:bg-rose-900 text-rose-300 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all cursor-pointer border border-rose-800"
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Delete</span>
+                </button>
+              </div>
 
               <div className="flex items-center gap-2">
                 <button

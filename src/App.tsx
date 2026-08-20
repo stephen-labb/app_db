@@ -59,6 +59,8 @@ import {
 } from './utils/validation';
 import { calculateCriticalityScore, scoreToTier } from './utils/scoring';
 
+import { Hourglass } from 'lucide-react';
+import { setStoredJwtToken, setStoredActiveSessionId, authFetch } from './utils/apiClient';
 import { Header } from './components/Header';
 import { Sidebar, TabType } from './components/Sidebar';
 import { StatsSummary } from './components/StatsSummary';
@@ -72,12 +74,20 @@ import { AssessmentMatrixView } from './components/AssessmentMatrixView';
 import { AuditTrailView } from './components/AuditTrailView';
 import { SelfRatingView } from './components/SelfRatingView';
 import { ReviewQueueView } from './components/ReviewQueueView';
-import { SsoScimView } from './components/SsoScimView';
 import { UserManagementView } from './components/UserManagementView';
 import { RbacControlView } from './components/RbacControlView';
+import { SecuritySessionView } from './components/SecuritySessionView';
 import { AzureLoginModal } from './components/AzureLoginModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SecurityReportsView } from './components/SecurityReportsView';
+import { AccessLogsView } from './components/AccessLogsView';
+import { useSessionTimeout } from './hooks/useSessionTimeout';
+import {
+  recordAccessLog,
+  loadSessionTimeoutMinutes,
+  saveSessionTimeoutMinutes
+} from './utils/accessLogsStorage';
+import { hasPermission } from './utils/ssoScimStorage';
 
 export default function App() {
   // Database State
@@ -112,6 +122,73 @@ export default function App() {
   const [isFormOpen, setIsFormOpen] = useState<boolean>(false);
   const [isSopUploadOpen, setIsSopUploadOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+
+  // Session Timeout State & Inactivity Enforcement
+  const [sessionTimeoutMinutes, setSessionTimeoutMinutes] = useState<number>(loadSessionTimeoutMinutes());
+  const [showTimeoutModal, setShowTimeoutModal] = useState<boolean>(false);
+
+  const handleSessionExpired = (expiredUser: ActiveSsoUser) => {
+    setShowTimeoutModal(true);
+    const unauth: ActiveSsoUser = {
+      isAuthenticated: false,
+      displayName: 'Guest User',
+      email: '',
+      role: 'IT_VIEWER'
+    };
+    setActiveSsoUser(unauth);
+    saveActiveSsoUser(unauth);
+    setUserRole('IT_VIEWER');
+    saveUserRole('IT_VIEWER');
+
+    recordAccessLog({
+      userEmail: expiredUser.email || 'session-user',
+      displayName: expiredUser.displayName || 'User',
+      role: expiredUser.role || userRole,
+      action: 'SESSION_TIMEOUT',
+      status: 'WARNING',
+      resource: 'Identity & Access Manager',
+      details: `Session automatically terminated after ${sessionTimeoutMinutes} minutes of inactivity.`,
+      loginMethod: expiredUser.loginMethod
+    });
+
+    addAuditLog(
+      expiredUser.displayName || 'System Security Engine',
+      expiredUser.role || userRole,
+      'UPDATE',
+      `Session automatically expired due to ${sessionTimeoutMinutes}m of inactivity.`
+    );
+    setAuditLogs(loadAuditLogs());
+  };
+
+  const { resetTimer } = useSessionTimeout({
+    timeoutMinutes: sessionTimeoutMinutes,
+    activeUser: activeSsoUser,
+    onTimeout: handleSessionExpired,
+    enabled: true
+  });
+
+  const handleUpdateSessionTimeout = (mins: number) => {
+    setSessionTimeoutMinutes(mins);
+    saveSessionTimeoutMinutes(mins);
+    resetTimer();
+  };
+
+  const handleTabSelect = (tab: TabType) => {
+    setActiveTab(tab);
+    resetTimer();
+    if (activeSsoUser && activeSsoUser.email) {
+      recordAccessLog({
+        userEmail: activeSsoUser.email,
+        displayName: activeSsoUser.displayName,
+        role: userRole,
+        action: 'TAB_ACCESS',
+        status: 'INFO',
+        resource: tab,
+        details: `Navigated to module: ${tab}`,
+        loginMethod: activeSsoUser.loginMethod
+      });
+    }
+  };
 
   // Filter State for Applications Table
   const [filterState, setFilterState] = useState<FilterState>({
@@ -175,13 +252,35 @@ export default function App() {
     }
   }, []);
 
-  const handleLoginSuccess = (user: ActiveSsoUser) => {
+  const handleLoginSuccess = async (user: ActiveSsoUser) => {
     setActiveSsoUser(user);
     saveActiveSsoUser(user);
     setUserRole(user.role);
     saveUserRole(user.role);
     setActiveTab('apps');
     setIsAzureLoginOpen(false);
+
+    // Register Session & Issue JWT Token with Backend Identity Server / Redis Cache
+    try {
+      const res = await authFetch('/api/auth/token', {
+        method: 'POST',
+        body: JSON.stringify({
+          userId: user.userId,
+          email: user.email,
+          displayName: user.displayName,
+          role: user.role,
+          groups: user.groups,
+          loginMethod: user.loginMethod
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.token) setStoredJwtToken(data.token);
+        if (data.sessionId) setStoredActiveSessionId(data.sessionId);
+      }
+    } catch (err) {
+      console.warn('Could not register JWT session with Redis backend:', err);
+    }
 
     // Synchronize OIDC user identity claims into provisionedUsers directory
     const email = user.email.toLowerCase();
@@ -222,6 +321,17 @@ export default function App() {
     setProvisionedUsers(updatedUsers);
     saveProvisionedUsers(updatedUsers);
 
+    recordAccessLog({
+      userEmail: user.email,
+      displayName: user.displayName,
+      role: user.role,
+      action: 'LOGIN_SUCCESS',
+      status: 'SUCCESS',
+      resource: 'OIDC Provider / Entra ID',
+      details: `Successful SSO authentication and role assertion (${user.role}). Session active.`,
+      loginMethod: user.loginMethod || 'OIDC_SSO'
+    });
+
     addAuditLog(
       user.displayName,
       user.role,
@@ -232,6 +342,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    const prevUser = activeSsoUser;
     const unauth: ActiveSsoUser = {
       isAuthenticated: false,
       displayName: 'Guest User',
@@ -242,6 +353,17 @@ export default function App() {
     saveActiveSsoUser(unauth);
     setUserRole('IT_VIEWER');
     saveUserRole('IT_VIEWER');
+
+    recordAccessLog({
+      userEmail: prevUser.email || 'guest-user',
+      displayName: prevUser.displayName || 'Guest User',
+      role: prevUser.role,
+      action: 'LOGOUT',
+      status: 'INFO',
+      resource: 'Identity & Access Manager',
+      details: 'User initiated explicit sign-out.',
+      loginMethod: prevUser.loginMethod
+    });
 
     addAuditLog(
       'Guest User',
@@ -259,8 +381,22 @@ export default function App() {
 
   // Role Switching Handler
   const handleRoleChange = (newRole: UserRole) => {
+    const prevRole = userRole;
     setUserRole(newRole);
     saveUserRole(newRole);
+
+    if (activeSsoUser && activeSsoUser.email) {
+      recordAccessLog({
+        userEmail: activeSsoUser.email,
+        displayName: activeSsoUser.displayName,
+        role: newRole,
+        action: 'ROLE_SWITCH',
+        status: 'INFO',
+        resource: 'Role-Based Access Control',
+        details: `Assumed active role: ${newRole} (switched from ${prevRole})`,
+        loginMethod: activeSsoUser.loginMethod
+      });
+    }
   };
 
   // CRUD Handlers for AppSec Admin
@@ -766,7 +902,7 @@ export default function App() {
         {/* Side Navigation Menu */}
         <Sidebar
           activeTab={activeTab}
-          onTabChange={setActiveTab}
+          onTabChange={handleTabSelect}
           appCount={applications.length}
           activeSopVersion={sopDocument.activeVersion}
           auditCount={auditLogs.length}
@@ -785,6 +921,15 @@ export default function App() {
         {/* Main Content Area */}
         <main className="flex-1 min-w-0 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         
+        {/* Tab: Access Logs */}
+        {activeTab === 'access-logs' && (
+          <AccessLogsView
+            currentRole={userRole}
+            activeSsoUser={activeSsoUser}
+            onOpenSettings={() => setIsSettingsOpen(true)}
+          />
+        )}
+
         {/* Tab: User Management */}
         {activeTab === 'user-management' && (
           <UserManagementView
@@ -796,6 +941,29 @@ export default function App() {
             onRefreshLogs={handleRefreshScimLogs}
             currentRole={userRole}
             activeSsoUser={activeSsoUser}
+            ssoConfig={ssoConfig}
+            onUpdateSsoConfig={(cfg) => {
+              setSsoConfig(cfg);
+              saveSsoConfig(cfg);
+            }}
+            scimConfig={scimConfig}
+            onUpdateScimConfig={(cfg) => {
+              setScimConfig(cfg);
+              saveScimConfig(cfg);
+            }}
+            groupMappings={groupMappings}
+            onUpdateGroupMappings={(mappings) => {
+              setGroupMappings(mappings);
+              saveGroupMappings(mappings);
+            }}
+            manualMappings={manualMappings}
+            onUpdateManualMappings={(mappings) => {
+              setManualMappings(mappings);
+              saveManualUserMappings(mappings);
+            }}
+            scimLogs={scimLogs}
+            onOpenAzureLogin={() => setIsAzureLoginOpen(true)}
+            onRoleChange={handleRoleChange}
           />
         )}
 
@@ -818,9 +986,26 @@ export default function App() {
           />
         )}
 
-        {/* Tab 0: Azure AD SSO & SCIM Engine */}
+        {/* Tab: HTTPS & Redis Sessions */}
+        {activeTab === 'security-sessions' && (
+          <SecuritySessionView
+            activeSsoUser={activeSsoUser}
+            onRoleChange={handleRoleChange}
+          />
+        )}
+
+        {/* Tab 0: Azure AD SSO & SCIM Engine (Integrated in User Management) */}
         {activeTab === 'sso-scim' && (
-          <SsoScimView
+          <UserManagementView
+            initialSubTab="AZURE_SSO"
+            provisionedUsers={provisionedUsers}
+            onUpdateUsers={(users) => {
+              setProvisionedUsers(users);
+              saveProvisionedUsers(users);
+            }}
+            onRefreshLogs={handleRefreshScimLogs}
+            currentRole={userRole}
+            activeSsoUser={activeSsoUser}
             ssoConfig={ssoConfig}
             onUpdateSsoConfig={(cfg) => {
               setSsoConfig(cfg);
@@ -841,27 +1026,63 @@ export default function App() {
               setManualMappings(mappings);
               saveManualUserMappings(mappings);
             }}
-            provisionedUsers={provisionedUsers}
-            onUpdateUsers={(users) => {
-              setProvisionedUsers(users);
-              saveProvisionedUsers(users);
-            }}
             scimLogs={scimLogs}
-            onRefreshLogs={handleRefreshScimLogs}
-            activeSsoUser={activeSsoUser}
             onOpenAzureLogin={() => setIsAzureLoginOpen(true)}
             onRoleChange={handleRoleChange}
           />
         )}
 
-        {/* Tab: ArmorCode Security Reports Generator */}
-        {activeTab === 'security-reports' && (
-          <SecurityReportsView applications={applications} initialSubTab="QUERY" />
+        {/* Tab: ArmorCode Scan Reports (Static, Container, Dynamic) */}
+        {(activeTab === 'security-reports' || activeTab === 'static-scan-report') && (
+          <SecurityReportsView
+            applications={applications}
+            initialSubTab="QUERY"
+            initialReportType="STATIC"
+            onReportTypeChange={(t) => {
+              if (t === 'CONTAINER') setActiveTab('container-scan-report');
+              else if (t === 'DYNAMIC') setActiveTab('dynamic-scan-report');
+              else setActiveTab('static-scan-report');
+            }}
+          />
+        )}
+
+        {activeTab === 'container-scan-report' && (
+          <SecurityReportsView
+            applications={applications}
+            initialSubTab="QUERY"
+            initialReportType="CONTAINER"
+            onReportTypeChange={(t) => {
+              if (t === 'STATIC') setActiveTab('static-scan-report');
+              else if (t === 'DYNAMIC') setActiveTab('dynamic-scan-report');
+              else setActiveTab('container-scan-report');
+            }}
+          />
+        )}
+
+        {activeTab === 'dynamic-scan-report' && (
+          <SecurityReportsView
+            applications={applications}
+            initialSubTab="QUERY"
+            initialReportType="DYNAMIC"
+            onReportTypeChange={(t) => {
+              if (t === 'STATIC') setActiveTab('static-scan-report');
+              else if (t === 'CONTAINER') setActiveTab('container-scan-report');
+              else setActiveTab('dynamic-scan-report');
+            }}
+          />
         )}
 
         {/* Tab: Auditable Promotion Records */}
         {activeTab === 'promotion-records' && (
-          <SecurityReportsView applications={applications} initialSubTab="EVIDENCES" />
+          <SecurityReportsView
+            applications={applications}
+            initialSubTab="EVIDENCES"
+            onReportTypeChange={(t) => {
+              if (t === 'STATIC') setActiveTab('static-scan-report');
+              else if (t === 'CONTAINER') setActiveTab('container-scan-report');
+              else setActiveTab('dynamic-scan-report');
+            }}
+          />
         )}
 
         {/* Tab 1: Applications Database */}
@@ -1005,7 +1226,47 @@ export default function App() {
         onExportJSON={handleExportJSON}
         onResetData={handleResetData}
         onOpenAzureLogin={() => setIsAzureLoginOpen(true)}
+        sessionTimeoutMinutes={sessionTimeoutMinutes}
+        onUpdateSessionTimeout={handleUpdateSessionTimeout}
       />
+
+      {/* Inactivity Session Timeout Notification Modal */}
+      {showTimeoutModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 text-center space-y-4">
+            <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600 mx-auto">
+              <Hourglass className="w-7 h-7" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">
+                Session Inactivity Timeout
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Your session was automatically signed out due to {sessionTimeoutMinutes} minutes of inactivity. Security policy requires active re-authentication.
+              </p>
+            </div>
+            <div className="pt-2 flex justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTimeoutModal(false);
+                  setIsAzureLoginOpen(true);
+                }}
+                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors cursor-pointer"
+              >
+                Sign In Again
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowTimeoutModal(false)}
+                className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-colors cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Footer */}
       <footer className="bg-white border-t border-slate-200 py-4 mt-8 text-center text-xs text-slate-500">
