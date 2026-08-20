@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { UserRole, ActiveSsoUser } from '../types';
 import {
   X,
@@ -14,8 +14,15 @@ import {
   AlertTriangle,
   FileSpreadsheet,
   FileJson,
-  User
+  User,
+  Clock,
+  Save,
+  Check
 } from 'lucide-react';
+import {
+  loadSessionTimeoutMinutes,
+  saveSessionTimeoutMinutes
+} from '../utils/accessLogsStorage';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -26,6 +33,8 @@ interface SettingsModalProps {
   onExportJSON: () => void;
   onResetData: () => void;
   onOpenAzureLogin?: () => void;
+  sessionTimeoutMinutes?: number;
+  onUpdateSessionTimeout?: (minutes: number) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -36,11 +45,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onExportCSV,
   onExportJSON,
   onResetData,
-  onOpenAzureLogin
+  onOpenAzureLogin,
+  sessionTimeoutMinutes: initialTimeout,
+  onUpdateSessionTimeout
 }) => {
   if (!isOpen) return null;
 
   const isAdmin = currentRole === 'APPSEC_ADMIN' || currentRole === 'SUPER_ADMIN';
+  const [timeoutVal, setTimeoutVal] = useState<number>(
+    initialTimeout || loadSessionTimeoutMinutes()
+  );
+  const [savedFeedback, setSavedFeedback] = useState<boolean>(false);
+
+  const handleSaveTimeout = (mins: number) => {
+    const validMins = Math.max(1, Math.min(1440, mins));
+    setTimeoutVal(validMins);
+    saveSessionTimeoutMinutes(validMins);
+    if (onUpdateSessionTimeout) {
+      onUpdateSessionTimeout(validMins);
+    }
+    setSavedFeedback(true);
+    setTimeout(() => setSavedFeedback(false), 2500);
+  };
 
   const handleTriggerReset = () => {
     onResetData();
@@ -72,7 +98,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 Database & Governance Settings
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Admin data controls, exports, and identity permissions
+                Session security timeouts, admin data controls, exports, and identity permissions
               </p>
             </div>
           </div>
@@ -144,6 +170,95 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <span>Switch Role / SSO</span>
                 </button>
               )}
+            </div>
+          </div>
+
+          {/* Session Security & Timeout Configuration Section */}
+          <div className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/40 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-indigo-100 border border-indigo-200 flex items-center justify-center text-indigo-700">
+                  <Clock className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Session Inactivity Timeout
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Enforced for all identities (Super Admin, AppSec Admin, IT Viewer, and OIDC users)
+                  </p>
+                </div>
+              </div>
+              <span className={`text-[10px] font-mono px-2 py-0.5 rounded-md font-semibold border ${
+                isAdmin
+                  ? 'bg-indigo-100 text-indigo-800 border-indigo-300'
+                  : 'bg-amber-50 text-amber-700 border-amber-200'
+              }`}>
+                {isAdmin ? 'Admin Configurable' : 'Read Only'}
+              </span>
+            </div>
+
+            <div className="bg-white rounded-xl p-3 border border-indigo-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <label className="text-xs font-semibold text-slate-700 block">
+                  Inactivity Timeout Duration (minutes)
+                </label>
+                <span className="text-[11px] text-slate-500 block mt-0.5">
+                  Users will be automatically logged out after this period of idle time.
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <select
+                  disabled={!isAdmin}
+                  value={[5, 10, 15, 30, 60, 120].includes(timeoutVal) ? timeoutVal : 'custom'}
+                  onChange={(e) => {
+                    if (e.target.value !== 'custom') {
+                      handleSaveTimeout(Number(e.target.value));
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-100 disabled:text-slate-400"
+                >
+                  <option value={5}>5 Minutes</option>
+                  <option value={10}>10 Minutes</option>
+                  <option value={15}>15 Minutes (Default)</option>
+                  <option value={30}>30 Minutes</option>
+                  <option value={60}>60 Minutes (1 Hour)</option>
+                  <option value={120}>120 Minutes (2 Hours)</option>
+                  <option value="custom">Custom Minutes</option>
+                </select>
+
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={1}
+                    max={1440}
+                    disabled={!isAdmin}
+                    value={timeoutVal}
+                    onChange={(e) => setTimeoutVal(Number(e.target.value))}
+                    className="w-16 px-2 py-1.5 rounded-lg border border-slate-200 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-100 disabled:text-slate-400 text-center"
+                  />
+                  <span className="text-xs text-slate-500 font-medium">min</span>
+                  {isAdmin && (
+                    <button
+                      onClick={() => handleSaveTimeout(timeoutVal)}
+                      className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                    >
+                      {savedFeedback ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-300" />
+                          <span>Saved</span>
+                        </>
+                      ) : (
+                        <>
+                          <Save className="w-3.5 h-3.5" />
+                          <span>Apply</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -243,7 +358,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
 
-              {/* Reset Data */}
+              {/* Clear / Reset Data */}
               <div className="p-4 rounded-xl border border-rose-200 bg-rose-50/40 hover:bg-rose-50/80 transition-all flex items-center justify-between gap-4">
                 <div className="flex items-start gap-3">
                   <div className="w-9 h-9 rounded-lg bg-rose-100 border border-rose-200 flex items-center justify-center text-rose-700 shrink-0">
@@ -251,10 +366,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                   <div>
                     <h4 className="text-sm font-semibold text-rose-900">
-                      Reset to Default Demo Data
+                      Clear / Reset Database State
                     </h4>
                     <p className="text-xs text-rose-700/80 mt-0.5">
-                      Reverts application records, pending reviews, and SOP document history to the default baseline demo state.
+                      Clears local cache and purges records to start with a clean production baseline.
                     </p>
                   </div>
                 </div>
@@ -267,10 +382,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-xs cursor-pointer'
                       : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
                   }`}
-                  title={isAdmin ? 'Reset database to demo data' : 'Admin privilege required'}
+                  title={isAdmin ? 'Clear database state' : 'Admin privilege required'}
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Reset Demo Data</span>
+                  <span>Clear Data</span>
                 </button>
               </div>
 
@@ -281,7 +396,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="p-3 bg-slate-100 rounded-xl border border-slate-200 text-slate-600 text-xs flex items-center justify-between">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>AppSec Criticality Database v2.4 • Azure AD & SCIM Governance Enforced</span>
+              <span>AppSec Governance Platform • Security Inactivity Timeout Enforced</span>
             </div>
           </div>
 

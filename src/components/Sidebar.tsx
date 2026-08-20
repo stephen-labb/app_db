@@ -21,11 +21,31 @@ import {
   Lock,
   Settings,
   Award,
-  ScanLine
+  ScanLine,
+  Layers,
+  Zap,
+  Activity,
+  ScrollText
 } from 'lucide-react';
 import { UserRole, ActiveSsoUser } from '../types';
 
-export type TabType = 'apps' | 'sso-scim' | 'user-management' | 'rbac-control' | 'security-reports' | 'promotion-records' | 'self-rating' | 'review-queue' | 'sop' | 'matrix' | 'audit';
+export type TabType =
+  | 'apps'
+  | 'sso-scim'
+  | 'user-management'
+  | 'rbac-control'
+  | 'security-sessions'
+  | 'security-reports'
+  | 'static-scan-report'
+  | 'container-scan-report'
+  | 'dynamic-scan-report'
+  | 'promotion-records'
+  | 'self-rating'
+  | 'review-queue'
+  | 'sop'
+  | 'matrix'
+  | 'audit'
+  | 'access-logs';
 
 interface NavItem {
   id: TabType;
@@ -111,15 +131,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ],
       subgroups: [
         {
-          name: 'Scans',
+          name: 'Scan Reports',
           icon: ScanLine,
           items: [
             {
-              id: 'security-reports' as TabType,
-              label: 'SAST Reports',
+              id: 'static-scan-report' as TabType,
+              label: 'Static Scan Report',
               icon: ShieldCheck,
-              badge: 'API',
+              badge: 'SAST/SCA',
               badgeBg: 'bg-emerald-100 text-emerald-800 font-bold dark:bg-emerald-900/60 dark:text-emerald-300',
+              adminOnly: false
+            },
+            {
+              id: 'container-scan-report' as TabType,
+              label: 'Container Security Report',
+              icon: Layers,
+              badge: 'Aqua',
+              badgeBg: 'bg-cyan-100 text-cyan-800 font-bold dark:bg-cyan-900/60 dark:text-cyan-300',
+              adminOnly: false
+            },
+            {
+              id: 'dynamic-scan-report' as TabType,
+              label: 'Dynamic Scan Report',
+              icon: Zap,
+              badge: 'DAST',
+              badgeBg: 'bg-purple-100 text-purple-800 font-bold dark:bg-purple-900/60 dark:text-purple-300',
               adminOnly: false
             }
           ]
@@ -148,7 +184,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ]
     },
     {
-      group: 'Governance & Audits',
+      group: 'Governance',
       items: [
         {
           id: 'sop' as TabType,
@@ -169,7 +205,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ]
     },
     {
-      group: 'Settings',
+      group: 'Logs & Audits',
+      items: [
+        {
+          id: 'access-logs' as TabType,
+          label: 'Access Logs',
+          icon: Activity,
+          badge: 'Live',
+          badgeBg: 'bg-cyan-100 text-cyan-800 font-bold dark:bg-cyan-900/60 dark:text-cyan-300',
+          adminOnly: false
+        },
+        {
+          id: 'audit' as TabType,
+          label: 'Audit Log Trail',
+          icon: ScrollText,
+          badge: `${auditCount}`,
+          badgeBg: 'bg-slate-200 text-slate-700',
+          adminOnly: true
+        }
+      ]
+    },
+    {
+      group: 'Identity & Access',
       adminOnlySection: true,
       items: [
         {
@@ -178,6 +235,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           icon: Users,
           badge: provisionedUsersCount > 0 ? `${provisionedUsersCount}` : 'IAM',
           badgeBg: 'bg-emerald-100 text-emerald-800 font-bold dark:bg-emerald-900/60 dark:text-emerald-300',
+          highlight: true,
           adminOnly: true
         },
         {
@@ -189,21 +247,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           adminOnly: true
         },
         {
-          id: 'sso-scim' as TabType,
-          label: 'SSO Configuration',
-          icon: KeyRound,
-          badge: scimUserCount > 0 ? `${scimUserCount} Synced` : 'Enterprise',
-          badgeBg: 'bg-blue-100 text-blue-800 font-bold dark:bg-blue-900/60 dark:text-blue-300',
-          highlight: true,
-          adminOnly: true
-        },
-        {
-          id: 'audit' as TabType,
-          label: 'Audit Log Trail',
-          icon: History,
-          badge: `${auditCount}`,
-          badgeBg: 'bg-slate-200 text-slate-700',
-          adminOnly: true
+          id: 'security-sessions' as TabType,
+          label: 'HTTPS & Sessions',
+          icon: Lock,
+          badge: 'Redis',
+          badgeBg: 'bg-indigo-100 text-indigo-800 font-bold dark:bg-indigo-900/60 dark:text-indigo-300',
+          adminOnly: false
         }
       ]
     }
@@ -211,7 +260,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const handleSelectTab = (tab: TabType, isRestricted: boolean) => {
     if (isRestricted && currentRole === 'IT_VIEWER') {
-      alert('Access Restricted: The Azure SSO & SCIM configuration module requires an AppSec Admin or Super Admin role assigned via SCIM group mappings.');
+      alert('Access Restricted: This administrative module requires an AppSec Admin or Super Admin role assigned via SCIM group mappings.');
       return;
     }
     onTabChange(tab);
@@ -227,8 +276,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <button
         key={tab.id}
         onClick={() => handleSelectTab(tab.id, isRestrictedForRole)}
-        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all relative group cursor-pointer ${
-          isNested && !isCollapsed ? 'pl-4.5' : ''
+        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl font-medium text-xs sm:text-sm transition-all relative group cursor-pointer ${
+          isNested && !isCollapsed ? 'pl-3' : ''
         } ${
           isActive
             ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
@@ -237,21 +286,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
             : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
         }`}
         title={
-          isCollapsed
-            ? isRestrictedForRole
-              ? `${tab.label} (Admin Only)`
-              : tab.label
-            : undefined
+          isRestrictedForRole
+            ? `${tab.label} (Admin Only)`
+            : tab.label
         }
       >
-        <Icon className={`w-5 h-5 shrink-0 ${isActive ? 'text-white' : isRestrictedForRole ? 'text-slate-600' : 'text-slate-400 group-hover:text-slate-200'}`} />
+        <Icon className={`w-4.5 h-4.5 shrink-0 ${isActive ? 'text-white' : isRestrictedForRole ? 'text-slate-600' : 'text-slate-400 group-hover:text-slate-200'}`} />
 
         {!isCollapsed && (
-          <span className="truncate flex-1 text-left flex items-center justify-between">
-            <span>{tab.label}</span>
+          <span className="flex-1 min-w-0 text-left flex items-center justify-between gap-1.5">
+            <span className="truncate leading-snug font-medium text-[13px]" title={tab.label}>
+              {tab.label}
+            </span>
             {isRestrictedForRole && (
-              <span className="text-[10px] font-mono text-slate-500 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 flex items-center gap-1">
-                <Lock className="w-2.5 h-2.5 text-amber-500" />
+              <span className="text-[9px] font-mono text-slate-400 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 flex items-center gap-1 shrink-0">
+                <Lock className="w-2.5 h-2.5 text-amber-400" />
                 <span>Admin</span>
               </span>
             )}
@@ -264,7 +313,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {tab.badge && !isCollapsed && !isRestrictedForRole && (
           <span
-            className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 ${
+            className={`text-[10px] px-2 py-0.5 rounded-full font-semibold shrink-0 whitespace-nowrap ${
               isActive
                 ? 'bg-white/20 text-white'
                 : tab.badgeBg
@@ -297,9 +346,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Sidebar Container */}
       <aside
-        className={`fixed md:sticky top-16 z-40 h-[calc(100vh-4rem)] bg-slate-900 text-slate-200 border-r border-slate-800 transition-all duration-300 flex flex-col shadow-xl ${
-          isMobileOpen ? 'translate-x-0 w-72' : '-translate-x-full md:translate-x-0'
-        } ${isCollapsed ? 'md:w-20' : 'md:w-64'}`}
+        className={`fixed md:sticky top-16 z-40 h-[calc(100vh-4rem)] bg-slate-900 text-slate-200 border-r border-slate-800 transition-all duration-300 flex flex-col shadow-xl shrink-0 ${
+          isMobileOpen ? 'translate-x-0 w-80 sm:w-84' : '-translate-x-full md:translate-x-0'
+        } ${isCollapsed ? 'md:w-20' : 'md:w-72 lg:w-80'}`}
       >
         {/* Collapse Toggle Button (Desktop Only) */}
         <div className="hidden md:flex items-center justify-between px-4 py-3 border-b border-slate-800/80">
@@ -318,7 +367,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Navigation Items Scroll Area */}
-        <div className="flex-1 overflow-y-auto px-3 py-4 space-y-6 scrollbar-thin scrollbar-thumb-slate-700">
+        <div className="flex-1 overflow-y-auto px-3 py-4 space-y-5 scrollbar-thin scrollbar-thumb-slate-700">
           {navigationSections.map((section, idx) => {
             if (section.adminOnlySection && !isAdmin) {
               return null;
@@ -341,11 +390,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <div key={subIdx} className="pt-1.5 space-y-1">
                       {!isCollapsed && (
                         <div className="flex items-center gap-1.5 px-3 py-1 text-[11px] font-semibold text-slate-400 tracking-wider uppercase">
-                          <SubgroupIcon className="w-3.5 h-3.5 text-indigo-400" />
-                          <span>{subgroup.name}</span>
+                          <SubgroupIcon className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                          <span className="truncate">{subgroup.name}</span>
                         </div>
                       )}
-                      <div className={!isCollapsed ? 'pl-2 border-l border-slate-800/80 ml-3 space-y-1' : 'space-y-1'}>
+                      <div className={!isCollapsed ? 'pl-2 border-l border-slate-800/80 ml-2 space-y-1' : 'space-y-1'}>
                         {subgroup.items.map((tab) => renderNavItem(tab, true))}
                       </div>
                     </div>

@@ -29,7 +29,6 @@ import {
   ShieldCheck,
   KeyRound,
   Users,
-  Terminal,
   Settings,
   Copy,
   Check,
@@ -44,7 +43,6 @@ import {
   Shield,
   Layers,
   Lock,
-  Play,
   FileText,
   UserCheck,
   Search,
@@ -74,6 +72,9 @@ interface SsoScimViewProps {
   activeSsoUser: ActiveSsoUser;
   onOpenAzureLogin: () => void;
   onRoleChange: (role: UserRole) => void;
+  initialSubTab?: 'azure-config' | 'mappings' | 'users' | 'logs';
+  hideTabsBar?: boolean;
+  hideHeaderBanner?: boolean;
 }
 
 export const SsoScimView: React.FC<SsoScimViewProps> = ({
@@ -91,11 +92,20 @@ export const SsoScimView: React.FC<SsoScimViewProps> = ({
   onRefreshLogs,
   activeSsoUser,
   onOpenAzureLogin,
-  onRoleChange
+  onRoleChange,
+  initialSubTab,
+  hideTabsBar = false,
+  hideHeaderBanner = false
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<
-    'azure-config' | 'scim-sandbox' | 'mappings' | 'users' | 'logs'
-  >('azure-config');
+    'azure-config' | 'mappings' | 'users' | 'logs'
+  >(initialSubTab || 'azure-config');
+
+  useEffect(() => {
+    if (initialSubTab) {
+      setActiveSubTab(initialSubTab);
+    }
+  }, [initialSubTab]);
 
   // Copy state helpers
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -110,31 +120,6 @@ export const SsoScimView: React.FC<SsoScimViewProps> = ({
   const [manualEmail, setManualEmail] = useState('');
   const [manualRole, setManualRole] = useState<UserRole>('APPSEC_ADMIN');
   const [manualNotes, setManualNotes] = useState('');
-
-  // SCIM Sandbox State
-  const [sandboxMethod, setSandboxMethod] = useState<'GET' | 'POST' | 'PATCH' | 'DELETE'>('GET');
-  const [sandboxEndpoint, setSandboxEndpoint] = useState<string>('/api/scim/v2/Users');
-  const [sandboxBody, setSandboxBody] = useState<string>(
-    JSON.stringify(
-      {
-        schemas: ['urn:ietf:params:scim:schemas:core:2.0:User'],
-        userName: 'new.engineer@enterprise.local',
-        displayName: 'New SecOps Engineer',
-        emails: [{ value: 'new.engineer@enterprise.local', primary: true }],
-        active: true,
-        groups: ['AppSec-Engineers']
-      },
-      null,
-      2
-    )
-  );
-  const [sandboxResponse, setSandboxResponse] = useState<{
-    status: number;
-    headers: Record<string, string>;
-    body: any;
-    timeMs: number;
-  } | null>(null);
-  const [isSandboxLoading, setIsSandboxLoading] = useState(false);
 
   // Mapping Rule Modal / Form State
   const [isAddRuleOpen, setIsAddRuleOpen] = useState(false);
@@ -302,72 +287,6 @@ export const SsoScimView: React.FC<SsoScimViewProps> = ({
   const handleGenerateSecret = () => {
     const newToken = `scim_sec_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
     setLocalScim({ ...localScim, secretToken: newToken });
-  };
-
-  // SCIM API Sandbox Request Executor
-  const handleRunSandbox = async () => {
-    setIsSandboxLoading(true);
-    const startTime = performance.now();
-    try {
-      const options: RequestInit = {
-        method: sandboxMethod,
-        headers: {
-          'Content-Type': 'application/scim+json',
-          'Authorization': `Bearer ${localScim.secretToken}`,
-          'X-SCIM-Test-Client': 'sandbox'
-        }
-      };
-
-      if (sandboxMethod !== 'GET' && sandboxBody) {
-        options.body = sandboxBody;
-      }
-
-      const res = await fetch(sandboxEndpoint, options);
-      const endTime = performance.now();
-      const status = res.status;
-
-      let resBody: any = null;
-      const contentType = res.headers.get('content-type');
-      if (contentType && contentType.includes('json')) {
-        resBody = await res.json();
-      } else {
-        resBody = await res.text();
-      }
-
-      const headersObj: Record<string, string> = {};
-      res.headers.forEach((v, k) => {
-        headersObj[k] = v;
-      });
-
-      setSandboxResponse({
-        status,
-        headers: headersObj,
-        body: resBody,
-        timeMs: Math.round(endTime - startTime)
-      });
-
-      addScimAuditLog(
-        sandboxMethod,
-        sandboxEndpoint,
-        status,
-        'SANDBOX_TEST',
-        `Executed SCIM Sandbox Request. Status: ${status}`,
-        undefined,
-        undefined,
-        sandboxBody.substring(0, 100)
-      );
-      onRefreshLogs();
-    } catch (err: any) {
-      const endTime = performance.now();
-      setSandboxResponse({
-        status: 500,
-        headers: {},
-        body: { error: err.message || 'Network failure' },
-        timeMs: Math.round(endTime - startTime)
-      });
-    } finally {
-      setIsSandboxLoading(false);
-    }
   };
 
   // Group Mapping Add Rule
@@ -640,83 +559,85 @@ export const SsoScimView: React.FC<SsoScimViewProps> = ({
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 animate-fadeIn">
       
       {/* View Header Banner */}
-      <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-6 md:p-8 border border-slate-800 shadow-xl text-white">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="space-y-2">
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center text-blue-400 shadow-md">
-                <svg className="w-7 h-7" viewBox="0 0 23 23" fill="currentColor">
-                  <path fill="#f25022" d="M1 1h10v10H1z" />
-                  <path fill="#7fba00" d="M12 1h10v10H12z" />
-                  <path fill="#00a4ef" d="M1 12h10v10H1z" />
-                  <path fill="#ffb900" d="M12 12h10v10H12z" />
-                </svg>
+      {!hideHeaderBanner && (
+        <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-6 md:p-8 border border-slate-800 shadow-xl text-white">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="space-y-2">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center text-blue-400 shadow-md">
+                  <svg className="w-7 h-7" viewBox="0 0 23 23" fill="currentColor">
+                    <path fill="#f25022" d="M1 1h10v10H1z" />
+                    <path fill="#7fba00" d="M12 1h10v10H12z" />
+                    <path fill="#00a4ef" d="M1 12h10v10H1z" />
+                    <path fill="#ffb900" d="M12 12h10v10H12z" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold tracking-tight text-slate-100">
+                    Azure AD OpenID Connect (OIDC) SSO & SCIM 2.0 Engine
+                  </h2>
+                  <p className="text-sm text-indigo-200/80">
+                    Microsoft Entra ID OIDC v2.0 Authentication & Automated Group-Based Role Provisioning
+                  </p>
+                </div>
               </div>
-              <div>
-                <h2 className="text-2xl font-bold tracking-tight text-slate-100">
-                  Azure AD OpenID Connect (OIDC) SSO & SCIM 2.0 Engine
-                </h2>
-                <p className="text-sm text-indigo-200/80">
-                  Microsoft Entra ID OIDC v2.0 Authentication & Automated Group-Based Role Provisioning
-                </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={onOpenAzureLogin}
+                className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs shadow-lg shadow-blue-600/20 flex items-center gap-2 transition-all cursor-pointer"
+              >
+                <UserCheck className="w-4 h-4" />
+                <span>Test Azure OIDC SSO Login</span>
+              </button>
+              <div className="bg-slate-950/80 px-3.5 py-2 rounded-xl border border-slate-800 text-xs font-mono flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span className="text-slate-300">SCIM 2.0 API Active</span>
               </div>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={onOpenAzureLogin}
-              className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs shadow-lg shadow-blue-600/20 flex items-center gap-2 transition-all cursor-pointer"
-            >
-              <UserCheck className="w-4 h-4" />
-              <span>Test Azure OIDC SSO Login</span>
-            </button>
-            <div className="bg-slate-950/80 px-3.5 py-2 rounded-xl border border-slate-800 text-xs font-mono flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              <span className="text-slate-300">SCIM 2.0 API Active</span>
+          {/* Current SSO User Banner */}
+          {activeSsoUser && activeSsoUser.isAuthenticated && (
+            <div className="mt-6 pt-6 border-t border-slate-800/80 flex flex-wrap items-center justify-between text-xs gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-xs uppercase">
+                  {activeSsoUser.displayName.substring(0, 2)}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-slate-200">{activeSsoUser.displayName}</span>
+                    <span className="text-[10px] bg-slate-800 text-indigo-300 border border-slate-700 px-2 py-0.5 rounded font-mono">
+                      {activeSsoUser.email}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 text-slate-400 text-[11px] mt-0.5">
+                    <span>Groups: {activeSsoUser.groups.join(', ') || 'None'}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-slate-400">Effective App Role:</span>
+                <span className={`px-2.5 py-1 rounded-md font-bold uppercase tracking-wider ${
+                  activeSsoUser.role === 'SUPER_ADMIN'
+                    ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                    : activeSsoUser.role === 'APPSEC_ADMIN'
+                    ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                    : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                }`}>
+                  {activeSsoUser.role === 'SUPER_ADMIN'
+                    ? 'Super Admin (Break-Glass)'
+                    : activeSsoUser.role === 'APPSEC_ADMIN'
+                    ? 'AppSec Admin (CRUD)'
+                    : 'IT Viewer (Read-Only)'}
+                </span>
+              </div>
             </div>
-          </div>
+          )}
         </div>
-
-        {/* Current SSO User Banner */}
-        {activeSsoUser && activeSsoUser.isAuthenticated && (
-          <div className="mt-6 pt-6 border-t border-slate-800/80 flex flex-wrap items-center justify-between text-xs gap-4">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-xs uppercase">
-                {activeSsoUser.displayName.substring(0, 2)}
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-slate-200">{activeSsoUser.displayName}</span>
-                  <span className="text-[10px] bg-slate-800 text-indigo-300 border border-slate-700 px-2 py-0.5 rounded font-mono">
-                    {activeSsoUser.email}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-400 text-[11px] mt-0.5">
-                  <span>Groups: {activeSsoUser.groups.join(', ') || 'None'}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="text-slate-400">Effective App Role:</span>
-              <span className={`px-2.5 py-1 rounded-md font-bold uppercase tracking-wider ${
-                activeSsoUser.role === 'SUPER_ADMIN'
-                  ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                  : activeSsoUser.role === 'APPSEC_ADMIN'
-                  ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
-                  : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
-              }`}>
-                {activeSsoUser.role === 'SUPER_ADMIN'
-                  ? 'Super Admin (Break-Glass)'
-                  : activeSsoUser.role === 'APPSEC_ADMIN'
-                  ? 'AppSec Admin (CRUD)'
-                  : 'IT Viewer (Read-Only)'}
-              </span>
-            </div>
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Hidden File Input for Restore */}
       <input
@@ -728,156 +649,148 @@ export const SsoScimView: React.FC<SsoScimViewProps> = ({
       />
 
       {/* SSO & SCIM Local Data Backup & Recovery Operations Bar */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-sm space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
-              <HardDrive className="w-5 h-5" />
+      {!hideHeaderBanner && (
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-sm space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                <HardDrive className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                  SSO & SCIM Local Data Backup & Recovery
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Export or restore Azure tenant settings, SCIM tokens, group rules, user directory ({provisionedUsers.length} users), and logs.
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                SSO & SCIM Local Data Backup & Recovery
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Export or restore Azure tenant settings, SCIM tokens, group rules, user directory ({provisionedUsers.length} users), and logs.
-              </p>
+
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {/* Export JSON */}
+              <button
+                onClick={exportSsoScimJSON}
+                className="px-3 py-1.5 rounded-xl bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 text-slate-100 text-xs font-medium border border-slate-700 flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+                title="Download full SSO & SCIM configuration and user directory as JSON"
+              >
+                <FileJson className="w-4 h-4 text-indigo-400" />
+                <span>Backup SSO/SCIM (JSON)</span>
+              </button>
+
+              {/* Export Directory CSV */}
+              <button
+                onClick={() => exportProvisionedUsersCSV(provisionedUsers)}
+                className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium border border-slate-200 dark:border-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="Export provisioned users list and mapped roles to CSV spreadsheet"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-500" />
+                <span>Export Users (CSV)</span>
+              </button>
+
+              {/* Restore JSON */}
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                title="Restore SSO & SCIM settings from a local JSON backup file"
+              >
+                <Upload className="w-4 h-4" />
+                <span>Restore Backup</span>
+              </button>
+
+              {/* Reset Defaults */}
+              <button
+                onClick={handleResetDefaults}
+                className="px-2.5 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 text-xs font-medium border border-rose-200 dark:border-rose-900/60 flex items-center gap-1 transition-colors cursor-pointer"
+                title="Reset SSO and SCIM parameters to demo factory defaults"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span className="hidden lg:inline">Reset Defaults</span>
+              </button>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 shrink-0">
-            {/* Export JSON */}
-            <button
-              onClick={exportSsoScimJSON}
-              className="px-3 py-1.5 rounded-xl bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 text-slate-100 text-xs font-medium border border-slate-700 flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
-              title="Download full SSO & SCIM configuration and user directory as JSON"
-            >
-              <FileJson className="w-4 h-4 text-indigo-400" />
-              <span>Backup SSO/SCIM (JSON)</span>
-            </button>
+          {/* Restore Notification Banners */}
+          {restoreSuccessMsg && (
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/80 rounded-xl text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2 animate-fadeIn">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span className="font-medium">{restoreSuccessMsg}</span>
+            </div>
+          )}
 
-            {/* Export Directory CSV */}
-            <button
-              onClick={() => exportProvisionedUsersCSV(provisionedUsers)}
-              className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium border border-slate-200 dark:border-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
-              title="Export provisioned users list and mapped roles to CSV spreadsheet"
-            >
-              <FileSpreadsheet className="w-4 h-4 text-emerald-500" />
-              <span>Export Users (CSV)</span>
-            </button>
-
-            {/* Restore JSON */}
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
-              title="Restore SSO & SCIM settings from a local JSON backup file"
-            >
-              <Upload className="w-4 h-4" />
-              <span>Restore Backup</span>
-            </button>
-
-            {/* Reset Defaults */}
-            <button
-              onClick={handleResetDefaults}
-              className="px-2.5 py-1.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/60 text-rose-700 dark:text-rose-300 text-xs font-medium border border-rose-200 dark:border-rose-900/60 flex items-center gap-1 transition-colors cursor-pointer"
-              title="Reset SSO and SCIM parameters to demo factory defaults"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span className="hidden lg:inline">Reset Defaults</span>
-            </button>
-          </div>
+          {restoreErrorMsg && (
+            <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/80 rounded-xl text-xs text-rose-800 dark:text-rose-300 flex items-center gap-2 animate-fadeIn">
+              <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+              <span className="font-medium">{restoreErrorMsg}</span>
+            </div>
+          )}
         </div>
-
-        {/* Restore Notification Banners */}
-        {restoreSuccessMsg && (
-          <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/80 rounded-xl text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2 animate-fadeIn">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-            <span className="font-medium">{restoreSuccessMsg}</span>
-          </div>
-        )}
-
-        {restoreErrorMsg && (
-          <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800/80 rounded-xl text-xs text-rose-800 dark:text-rose-300 flex items-center gap-2 animate-fadeIn">
-            <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
-            <span className="font-medium">{restoreErrorMsg}</span>
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Sub Navigation Tabs */}
-      <div className="border-b border-slate-200 dark:border-slate-800">
-        <nav className="flex space-x-2 overflow-x-auto pb-2 scrollbar-none" aria-label="SSO Subtabs">
-          
-          <button
-            onClick={() => setActiveSubTab('azure-config')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-xs whitespace-nowrap transition-all ${
-              activeSubTab === 'azure-config'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
-                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800'
-            }`}
-          >
-            <Settings className="w-4 h-4" />
-            <span>Azure AD Settings & Guide</span>
-          </button>
+      {!hideTabsBar && (
+        <div className="border-b border-slate-200 dark:border-slate-800">
+          <nav className="flex space-x-2 overflow-x-auto pb-2 scrollbar-none" aria-label="SSO Subtabs">
+            
+            <button
+              onClick={() => setActiveSubTab('users')}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-xs whitespace-nowrap transition-all ${
+                activeSubTab === 'users'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              <span>Provisioned Users</span>
+              <span className="ml-1 bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-[10px] px-2 py-0.5 rounded-full font-mono">
+                {provisionedUsers.length}
+              </span>
+            </button>
 
-          <button
-            onClick={() => setActiveSubTab('scim-sandbox')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-xs whitespace-nowrap transition-all ${
-              activeSubTab === 'scim-sandbox'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
-                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800'
-            }`}
-          >
-            <Terminal className="w-4 h-4" />
-            <span>SCIM 2.0 API Sandbox</span>
-          </button>
+            <button
+              onClick={() => setActiveSubTab('mappings')}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-xs whitespace-nowrap transition-all ${
+                activeSubTab === 'mappings'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800'
+              }`}
+            >
+              <Shield className="w-4 h-4 text-purple-500" />
+              <span>Mappings</span>
+              <span className="ml-1 bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 text-[10px] px-2 py-0.5 rounded-full font-mono">
+                {groupMappings.length}
+              </span>
+            </button>
 
-          <button
-            onClick={() => setActiveSubTab('mappings')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-xs whitespace-nowrap transition-all ${
-              activeSubTab === 'mappings'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
-                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800'
-            }`}
-          >
-            <Shield className="w-4 h-4" />
-            <span>Group-to-Role Mappings</span>
-            <span className="ml-1 bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 text-[10px] px-2 py-0.5 rounded-full font-mono">
-              {groupMappings.length}
-            </span>
-          </button>
+            <button
+              onClick={() => setActiveSubTab('azure-config')}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-xs whitespace-nowrap transition-all ${
+                activeSubTab === 'azure-config'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800'
+              }`}
+            >
+              <Settings className="w-4 h-4 text-blue-500" />
+              <span>Single Sign On (SSO)</span>
+            </button>
 
-          <button
-            onClick={() => setActiveSubTab('users')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-xs whitespace-nowrap transition-all ${
-              activeSubTab === 'users'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
-                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800'
-            }`}
-          >
-            <Users className="w-4 h-4" />
-            <span>Provisioned Users</span>
-            <span className="ml-1 bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 text-[10px] px-2 py-0.5 rounded-full font-mono">
-              {provisionedUsers.length}
-            </span>
-          </button>
+            <button
+              onClick={() => setActiveSubTab('logs')}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-xs whitespace-nowrap transition-all ${
+                activeSubTab === 'logs'
+                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800'
+              }`}
+            >
+              <FileText className="w-4 h-4" />
+              <span>SCIM Provisioning Logs</span>
+              <span className="ml-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] px-2 py-0.5 rounded-full font-mono">
+                {scimLogs.length}
+              </span>
+            </button>
 
-          <button
-            onClick={() => setActiveSubTab('logs')}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-medium text-xs whitespace-nowrap transition-all ${
-              activeSubTab === 'logs'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
-                : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800'
-            }`}
-          >
-            <FileText className="w-4 h-4" />
-            <span>SCIM Provisioning Logs</span>
-            <span className="ml-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[10px] px-2 py-0.5 rounded-full font-mono">
-              {scimLogs.length}
-            </span>
-          </button>
-
-        </nav>
-      </div>
+          </nav>
+        </div>
+      )}
 
       {/* SUBTAB 1: Azure AD Settings & Portal Integration Guide */}
       {activeSubTab === 'azure-config' && (
@@ -1045,7 +958,6 @@ export const SsoScimView: React.FC<SsoScimViewProps> = ({
                       className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-900 dark:text-white font-medium"
                     >
                       <option value="LIVE_OIDC">Live Azure AD OIDC v2.0 Redirect & Popup</option>
-                      <option value="SIMULATED_AZURE_OIDC">Azure Entra OIDC Claims Simulator</option>
                     </select>
                   </div>
                 </div>
@@ -1337,145 +1249,7 @@ export const SsoScimView: React.FC<SsoScimViewProps> = ({
         </div>
       )}
 
-      {/* SUBTAB 2: SCIM 2.0 API Sandbox */}
-      {activeSubTab === 'scim-sandbox' && (
-        <div className="space-y-6">
-          
-          <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-base text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                  <Terminal className="w-5 h-5 text-indigo-500" />
-                  <span>SCIM 2.0 Interactive API Sandbox</span>
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Execute live RFC 7644 SCIM requests directly against the server API endpoints
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSandboxMethod('GET');
-                    setSandboxEndpoint('/api/scim/v2/ServiceProviderConfig');
-                  }}
-                  className="px-3 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-xs text-slate-700 dark:text-slate-300 font-mono"
-                >
-                  GET Config
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSandboxMethod('GET');
-                    setSandboxEndpoint('/api/scim/v2/Users');
-                  }}
-                  className="px-3 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-xs text-slate-700 dark:text-slate-300 font-mono"
-                >
-                  GET Users
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSandboxMethod('POST');
-                    setSandboxEndpoint('/api/scim/v2/Users');
-                  }}
-                  className="px-3 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-xs text-slate-700 dark:text-slate-300 font-mono"
-                >
-                  POST User
-                </button>
-              </div>
-            </div>
-
-            {/* Sandbox Request Bar */}
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
-              <div className="md:col-span-2">
-                <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">HTTP Method</label>
-                <select
-                  value={sandboxMethod}
-                  onChange={(e) => setSandboxMethod(e.target.value as any)}
-                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-indigo-600 dark:text-indigo-400 font-mono"
-                >
-                  <option value="GET">GET</option>
-                  <option value="POST">POST</option>
-                  <option value="PATCH">PATCH</option>
-                  <option value="DELETE">DELETE</option>
-                </select>
-              </div>
-
-              <div className="md:col-span-8">
-                <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Endpoint Path</label>
-                <input
-                  type="text"
-                  value={sandboxEndpoint}
-                  onChange={(e) => setSandboxEndpoint(e.target.value)}
-                  className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-mono text-slate-900 dark:text-white"
-                />
-              </div>
-
-              <div className="md:col-span-2 flex items-end">
-                <button
-                  type="button"
-                  onClick={handleRunSandbox}
-                  disabled={isSandboxLoading}
-                  className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md flex items-center justify-center gap-1.5 transition-all disabled:opacity-50"
-                >
-                  {isSandboxLoading ? (
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Play className="w-3.5 h-3.5 fill-current" />
-                  )}
-                  <span>Send</span>
-                </button>
-              </div>
-            </div>
-
-            {/* JSON Payload Editor if POST/PATCH */}
-            {(sandboxMethod === 'POST' || sandboxMethod === 'PATCH') && (
-              <div>
-                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
-                  Request JSON Body (RFC 7643 Format)
-                </label>
-                <textarea
-                  rows={6}
-                  value={sandboxBody}
-                  onChange={(e) => setSandboxBody(e.target.value)}
-                  className="w-full bg-slate-950 text-emerald-400 font-mono text-xs p-3 rounded-xl border border-slate-800"
-                />
-              </div>
-            )}
-
-            {/* Sandbox Response Output */}
-            {sandboxResponse && (
-              <div className="bg-slate-950 rounded-2xl p-4 border border-slate-800 space-y-3 font-mono">
-                <div className="flex items-center justify-between text-xs border-b border-slate-800 pb-2">
-                  <div className="flex items-center gap-3">
-                    <span className={`px-2 py-0.5 rounded font-bold ${
-                      sandboxResponse.status >= 200 && sandboxResponse.status < 300
-                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                        : 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
-                    }`}>
-                      HTTP {sandboxResponse.status}
-                    </span>
-                    <span className="text-slate-400">{sandboxResponse.timeMs}ms</span>
-                  </div>
-                  <span className="text-slate-500 text-[11px]">Content-Type: application/scim+json</span>
-                </div>
-
-                <pre className="text-xs text-slate-200 overflow-x-auto max-h-80 scrollbar-thin p-2">
-                  {typeof sandboxResponse.body === 'string'
-                    ? sandboxResponse.body
-                    : JSON.stringify(sandboxResponse.body, null, 2)}
-                </pre>
-              </div>
-            )}
-
-          </div>
-
-        </div>
-      )}
-
-      {/* SUBTAB 3: Access Control, Manual User Overrides & SCIM Group Mappings */}
+      {/* SUBTAB 2: Access Control, Manual User Overrides & SCIM Group Mappings */}
       {activeSubTab === 'mappings' && (
         <div className="space-y-6">
           

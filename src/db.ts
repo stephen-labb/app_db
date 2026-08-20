@@ -205,6 +205,21 @@ export async function initDbTables(): Promise<boolean> {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         evidence_data JSONB DEFAULT '{}'::jsonb
       );
+
+      CREATE TABLE IF NOT EXISTS access_logs (
+        id VARCHAR(100) PRIMARY KEY,
+        timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        user_email VARCHAR(255),
+        display_name VARCHAR(255),
+        role VARCHAR(100),
+        login_method VARCHAR(100),
+        action VARCHAR(100),
+        resource VARCHAR(255),
+        ip_address VARCHAR(100),
+        user_agent TEXT,
+        status VARCHAR(50),
+        details TEXT
+      );
     `);
     isConnected = true;
     console.log('PostgreSQL database tables initialized successfully for app_db.');
@@ -227,7 +242,7 @@ export async function seedInitialData(force: boolean = false): Promise<{ success
 
   try {
     if (force) {
-      await pool.query('TRUNCATE TABLE applications, sop_documents, audit_logs, pending_assessments RESTART IDENTITY');
+      await pool.query('TRUNCATE TABLE applications, sop_documents, audit_logs, pending_assessments, promotion_evidences, access_logs RESTART IDENTITY');
     }
 
     // Seed default SOP document structure if empty
